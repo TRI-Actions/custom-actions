@@ -1,0 +1,34 @@
+{
+  "name": "cdk-drift-check",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "ncc build ./src/index.ts --license licenses.txt",
+    "lint": "npx eslint ./src",
+    "prettier": "npx prettier ./src --write"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.shared-services.aws.tri.global/infrastructure/cdk-drift-check.git"
+  },
+  "keywords": [],
+  "author": "TRI",
+  "license": "ISC",
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.0",
+    "@aws-sdk/client-cloudformation": "^3.549.0"
+  },
+  "devDependencies": {
+    "@types/node": "^18.13.0",
+    "@typescript-eslint/eslint-plugin": "^5.52.0",
+    "@typescript-eslint/parser": "^5.52.0",
+    "@vercel/ncc": "^0.36.1",
+    "eslint": "^8.34.0",
+    "eslint-config-prettier": "^8.6.0",
+    "prettier": "2.8.4",
+    "typescript": "^4.9.5"
+  },
+  "description": "A custom GitHub Action to detect drifts in CloudFromation deployments.",
+  "type": "commonjs"
+}

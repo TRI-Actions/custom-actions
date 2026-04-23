@@ -1,0 +1,19 @@
+name: 'CDK Drift Detection'
+description: 'Checks given CloudFormation stack for drifts'
+inputs:
+  region:
+    description: Region name
+    default: 'us-east-1'
+  account:
+    description: Account ID
+  stack_name:  # id of input
+    description: 'Name of the stack to check'
+    required: true
+outputs:
+  result: # id of output
+    description: 'Result of check'
+  details:
+    description: 'Detailed results of drift check'
+runs:
+  using: 'node20'
+  main: 'dist/index.js'

@@ -1,0 +1,71 @@
+name: 'run-script'
+description: 'Custom action to run arbitrary scripts'
+inputs:
+  path:
+    description: 'path of script directory'
+    default: '.'
+outputs:
+  log_path:
+    description: "log_path"
+    value: ${{ steps.output.outputs.log_path }}
+
+runs:
+  using: composite
+  steps:
+    - name: Set GitHub Path
+      run: echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
+      shell: bash
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+    
+    - name: Run All Scripts
+      id: all_scripts
+      shell: bash
+      run: |
+        run_scripts() {
+          local type=$1
+          local command=$2
+
+          if [ -d ${{ inputs.path }} ]; then
+            array=(`find ${{ inputs.path }}/ -maxdepth 1 -name "*.$type"`)
+            if [ ${#array[@]} -gt 0 ]; then
+              for script in ${{ inputs.path }}/*.$type; do
+                echo "" >> output.txt
+                echo "$script output:" >> output.txt
+                $command "$script" >> output.txt 2>&1
+              done
+            fi
+          elif [[ ${{ inputs.path }} == *.$type ]]; then
+            echo "" >> output.txt
+            echo "$script output:" >> output.txt
+            $command "${{ inputs.path }}" >> output.txt 2>&1
+          fi
+        }
+
+        if [ -f ${{ inputs.path }}/requirements.txt ]; then 
+          python3 -m pip install --upgrade pip
+          pip install -r ${{ inputs.path }}/requirements.txt
+        fi
+
+        touch output.txt
+
+        export ENVIRONMENT="$environment"
+
+        run_scripts "sh" "bash"
+
+        run_scripts "py" "python3"
+
+        run_scripts "js" "node"
+
+        run_scripts "java" "java -jar"
+
+    - name: Set output
+      if: always()
+      id: output
+      shell: bash
+      run: |
+        log_file=$(mktemp -p . run-script-log.XXXXXX.txt)
+        tr '`' "'" < output.txt > $log_file
+
+        echo "log_path=$(pwd)/$log_file" >> "$GITHUB_OUTPUT"
+        rm -rf output.txt

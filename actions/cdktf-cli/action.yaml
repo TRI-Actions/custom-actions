@@ -1,0 +1,45 @@
+name: 'cdktf-cli'
+description: 'Custom action to provide access to CDKTF cli'
+inputs:
+  action:
+    description: 'cdktf action to run'
+    required: true
+  workdirs:
+    description: 'workdir path to run cdktf in'
+    default: '.'
+  drift_check:
+    description: 'whether to run drift check or not'
+    default: 'false'
+  update_state:
+    description: whether we update the state or not
+    default: 'false'
+
+runs:
+  using: composite
+  steps:
+    - name: Set GitHub Path
+      run: echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
+      shell: bash
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+    - name: Run plan
+      if: ${{ inputs.action == 'plan' }}
+      id: plan
+      run: plan.sh
+      shell: bash
+      env:
+        WORKDIRS: ${{ inputs.workdirs }}
+        DRIFT_CHECK: ${{ inputs.drift_check }}
+    - name: deploy
+      if: ${{ inputs.action == 'deploy' }}
+      run: deploy.sh
+      shell: bash
+      env:
+        WORKDIRS: ${{ inputs.workdirs }}
+        UPDATE_STATE: ${{ inputs.update_state }}
+    - name: destroy
+      if: ${{ inputs.action == 'destroy' }}
+      run: destroy.sh
+      shell: bash
+      env:
+        WORKDIRS: ${{ inputs.workdirs }}

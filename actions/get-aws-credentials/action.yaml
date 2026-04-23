@@ -1,0 +1,49 @@
+name: "Get AWS Credentials"
+description: "Assume an IAM role chain (OIDC → federated role → target account)"
+
+inputs:
+  account-id:
+    description: "AWS account ID of the target environment"
+    required: true
+  region:
+    description: "AWS region (default: us-east-1)"
+    default: "us-east-1"
+  federated-role-name:
+    description: "Base name of the federated service role in the central account (default: GHAFederatedRole)"
+    default: "GHAFederatedRole"
+  target-role-name:
+    description: "Name of the target role to assume in the target account"
+    default: "DefaultCrossAccountRole"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Configure AWS credentials with OIDC in service account
+      uses: aws-actions/configure-aws-credentials@v5.1.0
+      with:
+        role-to-assume: arn:aws:iam::371027173325:role/${{ inputs.federated-role-name }}-${{ inputs.account-id }}
+        aws-region: ${{ inputs.region }}
+
+    - name: Assume target role in target account
+      id: assume-target
+      shell: bash
+      run: |
+        CREDS=$(aws sts assume-role \
+          --role-arn arn:aws:iam::${{ inputs.account-id }}:role/${{ inputs.target-role-name }} \
+          --role-session-name github-actions)
+
+        AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.Credentials.AccessKeyId')
+        AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.Credentials.SecretAccessKey')
+        AWS_SESSION_TOKEN=$(echo $CREDS | jq -r '.Credentials.SessionToken')
+
+        # Export for subsequent steps
+        {
+          echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+          echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+          echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN"
+        } >> $GITHUB_ENV
+
+        # Mask sensitive values in logs
+        echo "::add-mask::$AWS_ACCESS_KEY_ID"
+        echo "::add-mask::$AWS_SECRET_ACCESS_KEY"
+        echo "::add-mask::$AWS_SESSION_TOKEN"

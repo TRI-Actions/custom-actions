@@ -1,0 +1,103 @@
+---
+name: run_tests
+description: Executes tests for various repos
+branding:
+  icon: 'chevron-right'
+  color: 'blue'
+inputs:
+  test_path:
+    description: "Path to the directories holding the bash scripts that will be executed with bash"
+    required: true
+  starting_file:
+    description: "file name for where the container will start executing from"
+    required: true
+  local_container_path:
+    description: "Path of the container to deploy"
+    required: true
+  container_dir:
+    description: "Path where to deploy files inside container"
+
+permissions: read-all
+
+runs:
+  using: composite
+  steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+
+    - name: Build and Run Docker Image
+      id: docker_output
+      shell: bash
+      run: |
+        docker build -t my-custom-image ${{ inputs.local_container_path }}
+        HOST_DIR="${{ inputs.test_path }}"
+        CONTAINER_DIR="${{ inputs.container_dir }}"
+        cur_dir=$(pwd)
+
+        docker run -v ${cur_dir}/${HOST_DIR}/:${CONTAINER_DIR} my-custom-image ${{ inputs.starting_file }} > docker_output.txt
+        
+
+    - name: Use the Output
+      if: always()
+      shell: bash
+      run: |
+        touch docker_output.txt
+        cat docker_output.txt
+
+    - name: Comment the output to github pull requests
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const fs = require('fs');
+          const path = require('path');
+
+          function sleep(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+          }
+
+          const outputPath = path.join(process.env.GITHUB_WORKSPACE, 'docker_output.txt');
+          const output = fs.readFileSync(outputPath, 'utf8');
+          
+          const github_max_comment_length = 65000
+
+          for(let i = 0; i < Math.floor(output.length / github_max_comment_length) + 1; i += 1) {
+            let trunc_output = ""
+            if (i + 1 < Math.floor(output.length / github_max_comment_length) + 1){
+              trunc_output = output.slice(i * github_max_comment_length, (i + 1) * github_max_comment_length);
+            }
+            else {
+              trunc_output = output.slice(i * github_max_comment_length, output.length - 1);
+            }
+
+            await sleep(3000);
+
+            if (i > 0) {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `<details><summary>Truncated Output ${i}</summary>
+
+                ${trunc_output}
+
+                </details>`
+              });
+            }
+            else {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `<details><summary>Output</summary>
+
+                ${trunc_output}
+
+                </details>`
+              });
+            }
+          }
+
+              

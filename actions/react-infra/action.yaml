@@ -1,0 +1,445 @@
+---
+name: react-infra
+description: Template file for using github actions with terraform for repos that desire to use
+branding:
+  icon: 'chevron-right'
+  color: 'blue'
+
+inputs:
+  AWS_IAM_Role:
+    description: 'Cross Account role arn to assume to deploy infrastructure'
+    required: false
+    type: String
+  SSM_private_keys:
+    description: "comma separated list of ssm key locations, no spaces"
+    required: false
+    type: String
+  SSM_pat:
+    description: "Location of pat token in SSM"
+    required: false
+    type: String
+
+runs:
+  using: composite
+  steps:
+    - name: Check out repository code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+
+    - name: Get Head Sha
+      id: sha
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const pr = await github.rest.pulls.get({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number
+          });
+          const headSha = pr.data.head.sha;
+          core.setOutput('sha', headSha)
+
+    - name: Sign into IAM Role
+      if: ${{ inputs.AWS_IAM_Role != '' }}
+      uses: aws-actions/configure-aws-credentials@main
+      with:
+        role-to-assume: ${{ inputs.AWS_IAM_Role }}
+        role-session-name: terraform-infra-session
+        aws-region: us-east-1
+
+    - name: Retrieve private access keys
+      shell: bash
+      run: |
+        mkdir -p ~/.ssh
+        iter=0
+        IFS=',' read -ra ITEMS <<< "${SSM_PRIVATE_KEYS}"
+        eval "$(ssh-agent -s)"
+        for key in "${ITEMS[@]}"; do
+          aws --region us-east-1 ssm get-parameters --name "${key}" --with-decryption --query Parameters[0].Value --output text > ~/.ssh/id_rsa_${iter}
+          chmod 600 ~/.ssh/id_rsa_${iter}
+
+          echo -e "Host *\n  IdentityFile ~/.ssh/id_rsa_${iter}\n  StrictHostKeyChecking no" >> ~/.ssh/config
+          iter=$((iter + 1))
+        done
+
+        if [[ -n "${SSM_PAT}" ]]; then
+          GITHUB_TOKEN=$(aws --region us-east-1 ssm get-parameters --name "${SSM_PAT}" --with-decryption --query Parameters[0].Value --output text)
+          git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"
+          git config --global credential.helper store
+        fi
+      env:
+        SSM_PRIVATE_KEYS: ${{ inputs.SSM_private_keys }}
+        SSM_PAT: ${{ inputs.SSM_pat }}
+
+
+    - name: Check if current branch is behind head
+      uses: actions/github-script@v7
+      with:
+        script: |
+          let head, base;
+
+          if (context.eventName === 'pull_request') {
+
+            head = context.payload.pull_request.head.ref;
+            base = context.payload.pull_request.base.ref;
+          } else if (context.eventName === 'issue_comment' && context.payload.issue.pull_request) {
+
+            const prNumber = context.payload.issue.number;
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            head = pr.head.ref;
+            base = pr.base.ref;
+          }
+
+          console.log(`Comparing ${base}...${head}`);
+
+          const result = await github.rest.repos.compareCommits({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            base,
+            head,
+          });
+
+          if (result.data.status === 'behind' || result.data.status === 'diverged') {
+            const output = `❌ The branch '${head}' is behind 'head' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with main`
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+            core.setFailed(`❌ The branch '${head}' is behind 'head' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with main`);
+          } else {
+            console.log(`✅ The branch '${head}' is up-to-date with 'head'.`);
+          }
+
+    ##############################################
+    #                                            #
+    #            Terraform Plan                  #
+    #                                            #
+    ##############################################
+
+    - name: Create plan status check
+      uses: actions/github-script@v7
+      id: plan_status_check
+      with:
+        script: |
+          const formatDate = () => {
+            return new Date().toISOString()
+          }
+          const check = await github.rest.checks.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'TerraformPlan',
+            head_sha: `${{steps.sha.outputs.sha}}`,
+            started_at: formatDate(),
+            status: 'in_progress'
+          })
+          core.setOutput('CHECK_ID', check.data.id)
+
+    - name: Setup Terraform
+      uses: TRI-Actions/setup-terraform@v0.0.1
+      with:
+        terraform_wrapper: true
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '22'
+
+    - name: Terraform fmt
+      id: fmt
+      shell: bash
+      run: terraform fmt -check
+      continue-on-error: false
+      working-directory: terraform
+
+    - name: Execute terraform plan steps
+      id: terraform
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const { execSync } = require('child_process');
+          const process = require('process');
+
+          process.chdir('terraform');
+
+          try {
+            execSync("rm -rf .terraform");
+
+            execSync(`terraform init -no-color`);
+
+            stdout = execSync("terraform validate -no-color");
+            let validate_out = stdout.toString().trim();
+            execSync(`terraform plan -out=plan.tfplan`);
+            execSync(`terraform show -no-color plan.tfplan > plan.out`)
+
+            const run_url = process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID
+            const run_link = '<a href="' + run_url + '">Actions</a>.'
+            const fs = require('fs')
+            const plan_file = fs.readFileSync('plan.out', 'utf8').toString()
+            const plan = plan_file.length > 65000 ? "...\n" + plan_file.substring(plan_file.length - 65000) : plan_file
+            const truncated_message = plan_file.length > 65000 ? "Output is too long and was truncated. You can see full plan in " + run_link + "<br /><br />" : ""
+            const output = [
+              `Run [#${process.env.GITHUB_RUN_NUMBER}](${run_url})`,
+              `#### Changes`,
+              '',
+              `#### Terraform Format and Style 🖌 \`${{ steps.fmt.outcome }}\``,
+              '',
+              '<details><summary>Validation Output</summary>',
+              '',
+              '```bash',
+              validate_out.replace(/`/g, "'"),
+              '```',
+              '',
+              '</details>',
+              '',
+              '#### Terraform Plan 📖',
+              '',
+              '<details><summary>Show Plan</summary>',
+              '',
+              '```bash',
+              plan.replace(/`/g, "'"),
+              '```',
+              '',
+              '</details>',
+              '',
+            'Respond with \`GithubDeploy\` to deploy and merge changes.',
+            truncated_message
+            ].join('\n');
+
+            const eventName = context.eventName;
+
+            if (eventName != 'issue_comment') {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: output
+              })
+            }
+          }
+          catch (error) {
+            const stripAnsi = (str) => str.replace(
+              // eslint-disable-next-line no-control-regex
+              /\x1b\[[0-9;]*m/g, ''
+            );
+            const errorMsgRaw = error.stderr?.toString() || error.message || error.toString();
+            const errorMsg = stripAnsi(errorMsgRaw);
+            const err_output = [
+            `❌ Terraform Plan failed`,
+            '',
+            '<details><summary>Error Output</summary>',
+            '',
+            '```bash',
+            errorMsg.replace(/`/g, "'"),
+            '```',
+            '',
+            '</details>'
+            ].join('\n');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: err_output
+            });
+
+            core.setFailed("Terraform apply failed");
+          }
+    - name: Update Status Check
+      if: always()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const formatDate = () => {
+            return new Date().toISOString()
+          }
+
+          github.rest.checks.update({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            check_run_id:  parseInt(process.env.CHECK_ID),
+            status: 'completed',
+            completed_at: formatDate(),
+            conclusion: process.env.CHECK_CONCLUSION || 'success'
+          });
+      env:
+        CHECK_ID: ${{ steps.plan_status_check.outputs.CHECK_ID }}
+        CHECK_CONCLUSION: ${{ steps.terraform.conclusion }}
+
+    ##############################################
+    #                                            #
+    #            Terraform Apply                 #
+    #                                            #
+    ##############################################
+    - name: Count Approvals
+      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      id: count-approvals
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const reviews = await github.rest.pulls.listReviews({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number
+          });
+          const approvals = reviews.data.filter(review => review.state === 'APPROVED').length;
+          core.setOutput('approvals', approvals);
+      
+    #- name: Fail if No Approvals
+    #  if: steps.count-approvals.outputs.approvals == 0 &&
+    #      github.event.issue.pull_request &&
+    #      contains(github.event.comment.body, 'GithubDeploy')
+    #  uses: actions/github-script@v7
+    #  with:
+    #    script: |
+    #      const pr = await github.rest.pulls.get({
+    #        owner: context.repo.owner,
+    #        repo: context.repo.repo,
+    #        pull_number: context.issue.number
+    #      });
+#
+#          const baseBranch = pr.data.base.ref;
+#
+#          if (baseBranch === 'main') {
+#            await github.rest.issues.createComment({
+#              issue_number: context.issue.number,
+#              owner: context.repo.owner,
+#              repo: context.repo.repo,
+#              body: "No approvals, please have someone review your code before deploying to main."
+#            });
+
+#            core.setFailed("Approval required for deploying to main.");
+#          } else {
+#            console.log(`Branch is '${baseBranch}', skipping approval requirement.`);
+#          }
+
+
+    - name: Create apply status check
+      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      uses: actions/github-script@v7
+      id: apply_status_check
+      with:
+        script: |
+          const formatDate = () => {
+            return new Date().toISOString()
+          }
+          const check = await github.rest.checks.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            name: 'TerraformApply',
+            head_sha: `${{steps.sha.outputs.sha}}`,
+            started_at: formatDate(),
+            status: 'in_progress'
+          })
+          core.setOutput('CHECK_ID', check.data.id)
+
+    - name: Terraform Apply
+      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy')}}
+      uses: actions/github-script@v7
+      id: apply
+      with:
+        script: |
+
+          const { execSync } = require('child_process');
+          const process = require('process');
+
+
+          process.chdir('terraform');
+          try {
+            execSync("rm -rf .terraform");
+
+            execSync(`terraform init -no-color`);
+
+            execSync(`terraform apply -no-color -auto-approve plan.tfplan > apply.out`);
+
+            const run_url = process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID
+            const run_link = '<a href="' + run_url + '">Actions</a>.'
+            const fs = require('fs')
+            const apply_out_file = fs.readFileSync('apply.out', 'utf8').toString()
+            const apply_out = apply_out_file.length > 65000 ? "...\n" + apply_out_file.substring(apply_out_file.length - 65000) : apply_out_file
+            const truncated_message = apply_out_file.length > 65000 ? "Output is too long and was truncated. You can see full apply output in " + run_link + "<br /><br />" : ""
+            const output = [
+            `Run [#${process.env.GITHUB_RUN_NUMBER}](${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID})`,
+            '',
+            '#### Terraform Apply 📖',
+            '',
+            '<details><summary>Show Apply Output</summary>',
+            '',
+            '```bash',
+            apply_out.replace(/`/g, "'"),
+            '```',
+            '',
+            '</details>',
+            truncated_message
+            ].join('\n');
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+              });
+          }
+          catch (error) {
+            const stripAnsi = (str) => str.replace(
+              // eslint-disable-next-line no-control-regex
+              /\x1b\[[0-9;]*m/g, ''
+            );
+            const errorMsgRaw = error.stderr?.toString() || error.message || error.toString();
+            const errorMsg = stripAnsi(errorMsgRaw);
+            const err_output = [
+              `❌ Terraform Apply failed`,
+              '',
+              '<details><summary>Error Output</summary>',
+              '',
+              '```bash',
+              errorMsg.replace(/`/g, "'"),
+              '```',
+              '',
+              '</details>'
+              ].join('\n');
+
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: err_output
+              });
+              core.setFailed("Terraform apply failed");
+            }
+          
+
+    - name: Post apply outputs and update status check
+      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') && always() }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const formatDate = () => {
+            return new Date().toISOString()
+          }
+          github.rest.checks.update({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            check_run_id:  '${{ steps.apply_status_check.outputs.CHECK_ID }}',
+            status: 'completed',
+            completed_at: formatDate(),
+            conclusion: '${{ steps.apply.conclusion }}'
+          })
+
+    - name: Merge Branch
+      uses: actions/github-script@v7
+      if: ${{ job.status == 'success' && github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      with:
+        script: |
+            github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });

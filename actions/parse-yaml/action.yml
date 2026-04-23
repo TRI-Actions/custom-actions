@@ -1,0 +1,39 @@
+name: "YAML to Github Output"
+description: "Reads any key: value in a yaml file and sends it as a variable to the Github Output File"
+branding:
+  icon: 'chevron-right'
+  color: 'blue'
+inputs:
+  file_path:
+    description: "Path to the yaml file"
+    required: true
+  main_key:
+    description: "Main key for nested data (Optional)"
+    required: false
+  sub_key:
+    description: "Sub key for nested data (Optional)"
+    required: false
+  format_type:
+    description: 'The format of the YAML. Possible values: simple, crud'
+    required: false
+    default: 'simple'
+  primary_key:
+    description: "Primary key for the CRUD format (Optional)"
+    required: false
+  primary_value:
+    description: "Primary value for the CRUD format (Optional)"
+    required: false
+  top_level_keys:
+    description: "Top-level keys for the CRUD format (Optional, comma-separated)"
+    required: false
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  env:
+    FILE_PATH: ${{ inputs.file_path }}
+    FORMAT_TYPE: ${{ inputs.format_type }}
+    MAIN_KEY: ${{ inputs.main_key }}
+    SUB_KEY: ${{ inputs.sub_key }}
+    PRIMARY_KEY: ${{ inputs.primary_key }}
+    PRIMARY_VALUE: ${{ inputs.primary_value }}
+    TOP_LEVEL_KEYS: ${{ inputs.top_level_keys }}

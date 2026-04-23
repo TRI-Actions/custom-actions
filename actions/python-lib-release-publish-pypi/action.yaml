@@ -1,0 +1,232 @@
+name: "Python Release and Dispatch"
+description: "Compute version, create tag, build package, create GitHub release, upload dist assets, and dispatch publisher repo."
+
+inputs:
+  publish_branch:
+    description: "Allowed release branch"
+    required: false
+    default: "publish"
+
+  bump:
+    description: "Version bump type: patch, minor, major"
+    required: false
+    default: "patch"
+
+  version:
+    description: "Explicit version like 1.2.3. If set, bump is ignored."
+    required: false
+    default: ""
+
+  subdir:
+    description: "Optional package subdirectory"
+    required: false
+    default: ""
+
+  dispatch_token:
+    description: "Token used to dispatch publisher repo"
+    required: true
+
+  initiated_by:
+    description: "Who triggered the workflow"
+    required: false
+    default: ""
+
+  source_run_url:
+    description: "URL to source workflow run"
+    required: false
+    default: ""
+
+outputs:
+  version:
+    description: "Computed release version"
+    value: ${{ steps.ver.outputs.version }}
+
+  tag:
+    description: "Created git tag"
+    value: ${{ steps.ver.outputs.tag }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Validate branch
+      shell: bash
+      run: |
+        set -euo pipefail
+        expected_ref="refs/heads/${{ inputs.publish_branch }}"
+        if [ "${GITHUB_REF}" != "${expected_ref}" ]; then
+          echo "This action can only run on ${expected_ref}, current ref is ${GITHUB_REF}"
+          exit 1
+        fi
+
+    - name: Configure git identity
+      shell: bash
+      run: |
+        set -euo pipefail
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.11"
+
+    - name: Compute version + tag
+      id: ver
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        INPUT_VERSION="${{ inputs.version }}"
+        if [ -n "${INPUT_VERSION}" ]; then
+          if [[ ! "${INPUT_VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "inputs.version must be like 1.2.3"
+            exit 1
+          fi
+          VERSION="${INPUT_VERSION}"
+        else
+          BUMP="${{ inputs.bump }}"
+          LATEST_TAG="$(git tag --list 'v*' --sort=-v:refname | head -n 1 || true)"
+          if [ -z "${LATEST_TAG}" ]; then
+            LATEST_TAG="v0.0.0"
+          fi
+
+          BASE="${LATEST_TAG#v}"
+          IFS='.' read -r MAJOR MINOR PATCH <<< "${BASE}"
+
+          case "${BUMP}" in
+            major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
+            minor) MINOR=$((MINOR+1)); PATCH=0 ;;
+            patch) PATCH=$((PATCH+1)) ;;
+            *) echo "Unknown bump type: ${BUMP}"; exit 1 ;;
+          esac
+
+          VERSION="${MAJOR}.${MINOR}.${PATCH}"
+        fi
+
+        TAG="v${VERSION}"
+
+        if git rev-parse "${TAG}" >/dev/null 2>&1; then
+          echo "Tag ${TAG} already exists"
+          exit 1
+        fi
+
+        echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+        echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+
+    - name: Create and push git tag
+      shell: bash
+      run: |
+        set -euo pipefail
+        git tag -a "${{ steps.ver.outputs.tag }}" -m "Release ${{ steps.ver.outputs.tag }}"
+        git push origin "${{ steps.ver.outputs.tag }}"
+
+    - name: Build distributions
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m pip install -U pip build
+        if [ -n "${{ inputs.subdir }}" ]; then
+          cd "${{ inputs.subdir }}"
+        fi
+        python -m build
+
+    - name: Validate built artifact version matches tag
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        TAG="${{ steps.ver.outputs.tag }}"
+        EXPECTED_VERSION="${TAG#v}"
+
+        DIST_DIR="dist"
+        if [ -n "${{ inputs.subdir }}" ]; then
+          DIST_DIR="${{ inputs.subdir }}/dist"
+        fi
+
+        ARTIFACT="$(ls "${DIST_DIR}"/*.whl 2>/dev/null | head -n 1 || true)"
+        if [ -z "${ARTIFACT}" ]; then
+          ARTIFACT="$(ls "${DIST_DIR}"/*.tar.gz 2>/dev/null | head -n 1 || true)"
+        fi
+
+        if [ -z "${ARTIFACT}" ]; then
+          echo "No artifact found in ${DIST_DIR}"
+          exit 1
+        fi
+
+        BASE="$(basename "${ARTIFACT}")"
+
+        if [[ "${BASE}" == *.whl ]]; then
+          REST="${BASE#*-}"
+          ACTUAL_VERSION="${REST%%-*}"
+        else
+          STEM="${BASE%.tar.gz}"
+          ACTUAL_VERSION="${STEM##*-}"
+        fi
+
+        echo "Expected: ${EXPECTED_VERSION}"
+        echo "Actual: ${ACTUAL_VERSION}"
+
+        if [ "${EXPECTED_VERSION}" != "${ACTUAL_VERSION}" ]; then
+          echo "Artifact version does not match tag version"
+          exit 1
+        fi
+
+    - name: Create GitHub release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        gh release create "${{ steps.ver.outputs.tag }}" \
+          --title "${{ steps.ver.outputs.tag }}" \
+          --notes "Automated release for ${{ steps.ver.outputs.tag }}"
+
+    - name: Upload dist assets to GitHub release
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        DIST_DIR="dist"
+        if [ -n "${{ inputs.subdir }}" ]; then
+          DIST_DIR="${{ inputs.subdir }}/dist"
+        fi
+        gh release upload "${{ steps.ver.outputs.tag }}" "${DIST_DIR}"/* --clobber
+
+    - name: Dispatch publisher repo
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.dispatch_token }}
+        TARGET_REPO: ${{ github.repository }}
+        TARGET_REF: ${{ steps.ver.outputs.tag }}
+        PUBLISHER_REPO: tri-ie/tri-publish-pypi
+        EVENT_TYPE: publish-to-pypi
+        SUBDIR: ${{ inputs.subdir }}
+        INITIATED_BY: ${{ inputs.initiated_by }}
+        SOURCE_RUN_URL: ${{ inputs.source_run_url }}
+      run: |
+        set -euo pipefail
+
+        if [ -z "${INITIATED_BY}" ]; then
+          INITIATED_BY="${GITHUB_ACTOR}"
+        fi
+
+        if [ -z "${SOURCE_RUN_URL}" ]; then
+          SOURCE_RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+        fi
+
+        body="$(jq -n \
+          --arg et "$EVENT_TYPE" \
+          --arg repo "$TARGET_REPO" \
+          --arg ref "$TARGET_REF" \
+          --arg subdir "$SUBDIR" \
+          --arg initiated_by "$INITIATED_BY" \
+          --arg source_run_url "$SOURCE_RUN_URL" \
+          '{event_type:$et, client_payload:{repo:$repo, ref:$ref, subdir:$subdir, initiated_by:$initiated_by, source_run_url:$source_run_url}}')"
+
+        curl -fsSL -X POST \
+          -H "Accept: application/vnd.github+json" \
+          -H "Authorization: Bearer $GH_TOKEN" \
+          -H "X-GitHub-Api-Version: 2022-11-28" \
+          "https://api.github.com/repos/${PUBLISHER_REPO}/dispatches" \
+          -d "$body"
