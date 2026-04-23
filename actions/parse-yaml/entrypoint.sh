@@ -1,4 +1,5 @@
 #!/bin/sh -l
+echo "Parsing yaml file at $FILE_PATH with format type $FORMAT_TYPE"
 
 python /main.py \
 --file_path "$FILE_PATH" \
