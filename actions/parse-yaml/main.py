@@ -50,6 +50,7 @@ def extract_crud(yaml_data, primary_key=None, primary_value=None, top_level_keys
     return output
 
 def main_action():
+    print("Starting YAML parsing action...")
     parser = argparse.ArgumentParser()
     parser.add_argument('--file_path', required=True, help='Path to the yaml file')
     parser.add_argument('--main_key', default=None)
