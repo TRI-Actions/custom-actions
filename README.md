@@ -20,14 +20,8 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Dependencies
-        run: npm install
-
-      - name: Run Tests
-        run: npm test
+      - name: Trigger Custom Action
+        uses: TRI-Actions/custom-actions/actions/<Action_Name>@main
+        with: 
+          # Variables for custom-action here
 ````
