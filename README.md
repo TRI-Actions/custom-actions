@@ -3,8 +3,7 @@ A monorepo consisting of our github actions modules
 
 All repos can be used by creating the following github actions workflow:
 
-````markdown
-```yaml
+````yaml
 name: PR Workflow
 
 on:
