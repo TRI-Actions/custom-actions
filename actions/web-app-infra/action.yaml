@@ -52,7 +52,7 @@ runs:
     # Path 1: GitHub.com runners — federated OIDC login via target account ID
     - name: Sign into IAM Role (federated)
       if: ${{ inputs.Target_Account != '' }}
-      uses: TRI-Actions/get-aws-credentials@v1
+      uses: TRI-Actions/custom-actions/actions/get-aws-credentials@main
       with:
         account-id: ${{ inputs.Target_Account }}
         target-role-name: ${{ inputs.Target_Role_Name }}
@@ -218,13 +218,13 @@ runs:
 
     - name: Parse manifest file
       id: parse-yaml
-      uses: TRI-Actions/parse-yaml@v0.0.1
+      uses: TRI-Actions/custom-actions/actions/parse-yaml@main
       with:
         file_path: manifest.yaml
 
     - name: Run pre-commit checks
       if: ${{ !contains(github.event.comment.body, 'GithubDeploy') }}
-      uses: TRI-Actions/pre-commit-checks@main
+      uses: TRI-Actions/custom-actions/actions/pre-commit-checks@main
 
     - name: Get label
       id: get-label
@@ -293,7 +293,7 @@ runs:
     - name: Run scripts in before_scripts
       if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true'
       id: before_scripts
-      uses: TRI-Actions/run-script@main
+      uses: TRI-Actions/custom-actions/actions/run-script@main
       with:
         path: app_build_scripts/before_scripts
       env:
@@ -614,7 +614,7 @@ runs:
     - name: Run scripts in after_scripts
       if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true'
       id: after_scripts
-      uses: TRI-Actions/run-script@main
+      uses: TRI-Actions/custom-actions/actions/run-script@main
       with:
         path: app_build_scripts/after_scripts
       env:
