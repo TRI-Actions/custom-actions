@@ -98,7 +98,7 @@ runs:
         IFS=',' read -ra ITEMS <<< "${SSM_PRIVATE_KEYS}"
         eval "$(ssh-agent -s)"
         for key in "${ITEMS[@]}"; do
-          aws --region us-east-1 ssm get-parameters --name "${key}" --with-decryption --query Parameters[0].Value --output text | tee ~/.ssh/id_rsa_${iter}
+          aws --region us-east-1 ssm get-parameters --name "${key}" --with-decryption --query Parameters[0].Value --output text > ~/.ssh/id_rsa_${iter}
           chmod 600 ~/.ssh/id_rsa_${iter}
           echo -e "Host *\n  IdentityFile ~/.ssh/id_rsa_${iter}\n  StrictHostKeyChecking no" >> ~/.ssh/config
           iter=$((iter + 1))
