@@ -193,12 +193,13 @@ runs:
           for( let i = 0; i < intersection.length; i++) {
 
             try {
-              console.log("Processing account: " + intersection[i]);
 
               process.chdir(intersection[i]);
               execSync("rm -rf .terraform");
 
-              console.log("Initializing terraform for account: " + intersection[i]);
+              console.log("Initializing terraform for the following account: ");
+              console.log("Bucket: tri-tf-state-us-east-1");
+              console.log("Key: " + keyName + "/" + intersection[i] + "/terraform.tfstate");
               execSync(`terraform init -no-color -input=false -get=true \
                 -backend-config="bucket=tri-tf-state-us-east-1" \
                 -backend-config="key=${keyName}/${intersection[i]}/terraform.tfstate" \
