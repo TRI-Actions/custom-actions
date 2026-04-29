@@ -184,6 +184,7 @@ runs:
       uses: TRI-Actions/setup-terraform@v0.0.1
       with:
         terraform_wrapper: true
+        terraform_version: 1.14.9
 
     - name: Get Head Sha
       id: sha
