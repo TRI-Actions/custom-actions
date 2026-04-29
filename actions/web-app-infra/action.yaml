@@ -135,7 +135,7 @@ runs:
     #                                            #
     ##############################################
 
-    - name: Check if current branch is behind main
+    - name: Check if current branch is behind base branch
       uses: actions/github-script@v7
       with:
         script: |
@@ -168,16 +168,16 @@ runs:
           });
 
           if (result.data.status === 'behind' || result.data.status === 'diverged') {
-            const output = `❌ The branch '${head}' is behind 'main' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with main`
+            const output = `❌ The branch '${head}' is behind '${base}' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with ${base}`
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: output
             })
-            core.setFailed(`❌ The branch '${head}' is behind 'main' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with main`);
+            core.setFailed(`❌ The branch '${head}' is behind '${base}' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with ${base}`);
           } else {
-            console.log(`✅ The branch '${head}' is up-to-date with 'main'.`);
+            console.log(`✅ The branch '${head}' is up-to-date with '${base}'.`);
           }
 
     - name: Setup Terraform
