@@ -9,6 +9,7 @@ on:
       - main
 jobs:
   lint:
+    permissions: write-all
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
