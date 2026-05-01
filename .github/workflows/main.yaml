@@ -24,16 +24,15 @@ jobs:
 
       - name: Install pre-commit
         run: pip install pre-commit
-        
+
       - name: Run pre-commit
         id: pre-commit
         continue-on-error: true
         run: |
           pre-commit run --all-files --verbose > precommit.log 2>&1
-          echo "exit_code=$?" >> $GITHUB_OUTPUT
 
       - name: Commit fixes (if any)
-        if: steps.pre-commit.outputs.exit_code != '0'
+        if: ${{always() && steps.pre-commit.outcome == 'failure' }}
         run: |
           if ! git diff --quiet; then
             git config user.name "github-actions"
@@ -46,7 +45,7 @@ jobs:
           fi
 
       - name: Create PR comment with linting results
-        if: steps.pre-commit.outputs.exit_code != '0'
+        if: ${{ always() && steps.pre-commit.outcome == 'failure' }}
         uses: actions/github-script@v7
         with:
           script: |
