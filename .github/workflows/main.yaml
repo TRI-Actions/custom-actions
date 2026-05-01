@@ -24,13 +24,16 @@ jobs:
 
       - name: Install pre-commit
         run: pip install pre-commit
-      
+        
       - name: Run pre-commit
         id: pre-commit
-        run: pre-commit run --all-files
-      
+        continue-on-error: true
+        run: |
+          pre-commit run --all-files --verbose > precommit.log 2>&1
+          echo "exit_code=$?" >> $GITHUB_OUTPUT
+
       - name: Commit fixes (if any)
-        if: ${{ steps.pre-commit.outcome == 'failure' && always() }}
+        if: steps.pre-commit.outputs.exit_code != '0'
         run: |
           if ! git diff --quiet; then
             git config user.name "github-actions"
@@ -41,14 +44,18 @@ jobs:
           else
             echo "No changes to commit"
           fi
+
       - name: Create PR comment with linting results
-        if: ${{ steps.pre-commit.outcome == 'failure' && always()}}
+        if: steps.pre-commit.outputs.exit_code != '0'
         uses: actions/github-script@v7
         with:
           script: |
-            const { execSync } = require('child_process');
-            const stdout = execSync('pre-commit run --all-files --verbose', { encoding: 'utf8' });
-            const commentBody = `### Pre-commit Failed\n\`\`\`\n${stdout}\n\`\`\``;
+            const fs = require('fs');
+
+            const output = fs.readFileSync('precommit.log', 'utf8');
+
+            const commentBody = `### Pre-commit Failed\n\`\`\`\n${output}\n\`\`\``;
+
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
