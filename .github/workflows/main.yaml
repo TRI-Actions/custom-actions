@@ -28,7 +28,7 @@ jobs:
       - name: Run pre-commit
         id: pre-commit
         run: |
-          pre-commit run --all-files --verbose > precommit.log 2>&1
+          pre-commit run --all-files > precommit.log 2>&1
 
       - name: Commit fixes (if any)
         if: ${{always() && steps.pre-commit.outcome == 'failure' }}
