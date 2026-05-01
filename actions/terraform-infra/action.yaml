@@ -178,7 +178,7 @@ runs:
 
           const intersection = current_folders.filter(value => account_diff.includes(value));
 
-          const repoName = context.repo.repo; 
+          const repoName = context.repo.repo;
           const firstHyphenIndex = repoName.indexOf('-');
           const lastHyphenIndex = repoName.lastIndexOf('-');
           const keyName = repoName.substring(firstHyphenIndex + 1, lastHyphenIndex);

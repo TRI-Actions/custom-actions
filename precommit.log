@@ -1,0 +1,28 @@
+[INFO] Initializing environment for https://github.com/pre-commit/pre-commit-hooks.
+[WARNING] repo `https://github.com/pre-commit/pre-commit-hooks` uses deprecated stage names (commit, push) which will be removed in a future version.  Hint: often `pre-commit autoupdate --repo https://github.com/pre-commit/pre-commit-hooks` will fix this.  if it does not -- consider reporting an issue to that repo.
+[INFO] Installing environment for https://github.com/pre-commit/pre-commit-hooks.
+[INFO] Once installed this environment will be reused.
+[INFO] This may take a few minutes...
+trim trailing whitespace.................................................Failed
+- hook id: trailing-whitespace
+- duration: 0.14s
+- exit code: 1
+- files were modified by this hook
+
+Fixing actions/terraform-infra/action.yaml
+
+fix end of files.........................................................Passed
+- hook id: end-of-file-fixer
+- duration: 0.08s
+check yaml...............................................................Passed
+- hook id: check-yaml
+- duration: 0.18s
+check json...............................................................Passed
+- hook id: check-json
+- duration: 0.06s
+check for merge conflicts................................................Passed
+- hook id: check-merge-conflict
+- duration: 0.09s
+check for added large files..............................................Passed
+- hook id: check-added-large-files
+- duration: 0.09s
