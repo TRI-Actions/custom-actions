@@ -291,7 +291,7 @@ runs:
           });
           const approvals = reviews.data.filter(review => review.state === 'APPROVED').length;
           core.setOutput('approvals', approvals);
-      
+
     #- name: Fail if No Approvals
     #  if: steps.count-approvals.outputs.approvals == 0 &&
     #      github.event.issue.pull_request &&
@@ -414,7 +414,7 @@ runs:
               });
               core.setFailed("Terraform apply failed");
             }
-          
+
 
     - name: Post apply outputs and update status check
       if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') && always() }}

@@ -21,7 +21,7 @@ def extract_simple_nested(yaml_data, main_key=None, sub_key=None):
         yaml_data = yaml_data.get(main_key, {})
     if sub_key:
         yaml_data = yaml_data.get(sub_key, {})
-    
+
     return yaml_data
 
 def extract_crud(yaml_data, primary_key=None, primary_value=None, top_level_keys=None):

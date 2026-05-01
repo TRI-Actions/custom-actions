@@ -211,7 +211,7 @@ runs:
               stdout = execSync("terraform validate -no-color");
               let validate_out = stdout.toString().trim();
               execSync(`mkdir -p ${intersection[i]}`);
-              
+
               console.log("Planning terraform for account: " + intersection[i]);
               execSync(`terraform plan -lock=false -out=${intersection[i]}/plan.tfplan`);
               execSync(`terraform show -no-color ${intersection[i]}/plan.tfplan > plan.out`)
@@ -318,7 +318,7 @@ runs:
     #            Terraform Apply                 #
     #                                            #
     ##############################################
-    
+
     - name: Count Approvals
       if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
       id: count-approvals

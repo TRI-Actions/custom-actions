@@ -38,7 +38,7 @@ runs:
         cur_dir=$(pwd)
 
         docker run -v ${cur_dir}/${HOST_DIR}/:${CONTAINER_DIR} my-custom-image ${{ inputs.starting_file }} > docker_output.txt
-        
+
 
     - name: Use the Output
       if: always()
@@ -60,7 +60,7 @@ runs:
 
           const outputPath = path.join(process.env.GITHUB_WORKSPACE, 'docker_output.txt');
           const output = fs.readFileSync(outputPath, 'utf8');
-          
+
           const github_max_comment_length = 65000
 
           for(let i = 0; i < Math.floor(output.length / github_max_comment_length) + 1; i += 1) {
@@ -99,5 +99,3 @@ runs:
               });
             }
           }
-
-              

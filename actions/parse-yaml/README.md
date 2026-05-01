@@ -64,7 +64,7 @@ jobs:
     - name: Print Outputs
       run: |
         echo "Cluster Name: ${{ steps.yaml-output.outputs.cluster-name }}"
-        echo "App Name: ${{ steps.yaml-output.outputs.app-name }}"    
+        echo "App Name: ${{ steps.yaml-output.outputs.app-name }}"
 ```
 
 ### CRUD

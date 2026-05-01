@@ -24,7 +24,7 @@ AWS_IAM_Role:
 ```
 
 If no IAM role is set, it will use whatever is set by default.
-SSM_private keys can have multiple key locations separated by a comma. 
+SSM_private keys can have multiple key locations separated by a comma.
 SSM_pat can only use one personal access token location.
 
 All variables can be omitted or used depending on the context.
@@ -37,7 +37,7 @@ jobs:
     runs-on: ubuntu-latest
     name: ${{ github.event.issue.pull_request && 'deploy' || 'plan' }}
     permissions: write-all
- 
+
     steps:
       - name: run composite module
         uses: TRI-Actions/custom-actions/actions/web-app-infra@main

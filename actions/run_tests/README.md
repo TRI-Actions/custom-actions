@@ -25,7 +25,7 @@ inputs:
       runs-on: ubuntu-latest
       name: my-pipeline
       permissions: write-all
-   
+
       steps:
         - name: run composite module
           uses: TRI-Actions/custom-actions/actions/run_tests@main

@@ -22,6 +22,6 @@ jobs:
 
       - name: Trigger Custom Action
         uses: TRI-Actions/custom-actions/actions/<Action_Name>@main
-        with: 
+        with:
           # Variables for custom-action here
 ````

@@ -1,11 +1,11 @@
 name: 'pulumi-cli'
-description: 'Custom action to provide access to the Pulumi CLI' 
+description: 'Custom action to provide access to the Pulumi CLI'
 inputs:
   action:
     description: 'Pulumi action to run'
     required: true
   workdirs:
-    description: 'workdir path to run Pulumi in' 
+    description: 'workdir path to run Pulumi in'
     default: '.'
   drift_check:
     description: 'whether to run drift check or not'

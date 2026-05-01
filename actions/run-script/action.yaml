@@ -17,7 +17,7 @@ runs:
       shell: bash
       env:
         GITHUB_ACTION_PATH: ${{ github.action_path }}
-    
+
     - name: Run All Scripts
       id: all_scripts
       shell: bash
@@ -42,7 +42,7 @@ runs:
           fi
         }
 
-        if [ -f ${{ inputs.path }}/requirements.txt ]; then 
+        if [ -f ${{ inputs.path }}/requirements.txt ]; then
           python3 -m pip install --upgrade pip
           pip install -r ${{ inputs.path }}/requirements.txt
         fi
