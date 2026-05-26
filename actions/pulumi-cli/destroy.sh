@@ -13,7 +13,7 @@ for i in $WORKDIRS; do
 
   cd $i
   echo Destroying $i
-  pulumi destroy --yes --non-interactive --color=never > destroy.out 2>&1
+  pulumi destroy --yes --non-interactive --color=never 2>&1 | tee destroy.out
 
   if [ ! $i == '.' ]; then
     cd ..
