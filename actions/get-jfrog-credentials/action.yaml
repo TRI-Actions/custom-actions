@@ -1,0 +1,90 @@
+name: "Get JFrog Credentials"
+description: "Exchange a GitHub OIDC ID token for a short-lived JFrog access token"
+
+inputs:
+  jfrog-url:
+    description: "JFrog platform base URL"
+    default: "https://toyotaresearchinstitute.jfrog.io"
+  oidc-provider:
+    description: "Name of the OIDC provider configured in JFrog"
+    required: true
+  audience:
+    description: "OIDC audience to request from GitHub. Must match the audience configured on the JFrog provider."
+    default: "jfrog-github-oidc"
+  write-netrc:
+    description: "If true (default), write ~/.netrc with the access token so curl -n / terraform pick it up automatically."
+    default: "true"
+
+outputs:
+  access-token:
+    description: "Short-lived JFrog access token"
+    value: ${{ steps.jftoken.outputs.access_token }}
+  username:
+    description: "JFrog principal (sub claim from the access token JWT)"
+    value: ${{ steps.netrc.outputs.username }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Get GitHub OIDC ID token
+      id: idtoken
+      shell: bash
+      run: |
+        ID_TOKEN=$(curl -sSL \
+          -H "User-Agent: actions/oidc-client" \
+          -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+          "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${{ inputs.audience }}" \
+          | jq -r .value)
+        echo "::add-mask::$ID_TOKEN"
+        echo "id_token=$ID_TOKEN" >> "$GITHUB_OUTPUT"
+
+    - name: Exchange ID token for JFrog access token
+      id: jftoken
+      shell: bash
+      env:
+        ID_TOKEN: ${{ steps.idtoken.outputs.id_token }}
+      run: |
+        RESPONSE=$(curl -sSL -X POST "${{ inputs.jfrog-url }}/access/api/v1/oidc/token" \
+          -H "Content-Type: application/json" \
+          -d "{
+            \"grant_type\": \"urn:ietf:params:oauth:grant-type:token-exchange\",
+            \"subject_token_type\": \"urn:ietf:params:oauth:token-type:id_token\",
+            \"subject_token\": \"${ID_TOKEN}\",
+            \"provider_name\": \"${{ inputs.oidc-provider }}\"
+          }")
+        ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.access_token // empty')
+        if [ -z "$ACCESS_TOKEN" ]; then
+          echo "JFrog token exchange failed. Response:"
+          echo "$RESPONSE"
+          echo ""
+          echo "ID token claims (for JFrog identity-mapping debugging):"
+          ID_PAYLOAD=$(echo "$ID_TOKEN" | cut -d. -f2)
+          PAD=$(( 4 - ${#ID_PAYLOAD} % 4 ))
+          [ $PAD -lt 4 ] && ID_PAYLOAD="${ID_PAYLOAD}$(printf '=%.0s' $(seq 1 $PAD))"
+          echo "$ID_PAYLOAD" | tr '_-' '/+' | base64 -d \
+            | jq '{sub, aud, repository, event_name, ref, job_workflow_ref}'
+          exit 1
+        fi
+        echo "::add-mask::$ACCESS_TOKEN"
+        echo "access_token=$ACCESS_TOKEN" >> "$GITHUB_OUTPUT"
+        echo "JF_ACCESS_TOKEN=$ACCESS_TOKEN" >> "$GITHUB_ENV"
+
+    - name: Extract principal and optionally write ~/.netrc
+      id: netrc
+      shell: bash
+      env:
+        ACCESS_TOKEN: ${{ steps.jftoken.outputs.access_token }}
+        JFROG_URL: ${{ inputs.jfrog-url }}
+        WRITE_NETRC: ${{ inputs.write-netrc }}
+      run: |
+        PAYLOAD=$(echo "$ACCESS_TOKEN" | cut -d. -f2)
+        PAD=$(( 4 - ${#PAYLOAD} % 4 ))
+        [ $PAD -lt 4 ] && PAYLOAD="${PAYLOAD}$(printf '=%.0s' $(seq 1 $PAD))"
+        JF_SUB=$(echo "$PAYLOAD" | tr '_-' '/+' | base64 -d | jq -r .sub)
+        echo "::add-mask::$JF_SUB"
+        echo "username=$JF_SUB" >> "$GITHUB_OUTPUT"
+        if [ "$WRITE_NETRC" = "true" ]; then
+          HOST=$(echo "$JFROG_URL" | sed -E 's#^https?://##; s#/.*$##')
+          echo "machine $HOST login $JF_SUB password $ACCESS_TOKEN" > ~/.netrc
+          chmod 600 ~/.netrc
+        fi
