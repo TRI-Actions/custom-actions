@@ -20,9 +20,9 @@ for i in $WORKDIRS; do
   echo Deploying for $i
   if [ "$UPDATE_STATE" == "true" ]; then
     echo "Updating state for $i"
-    pulumi refresh --yes --non-interactive --color=never > deploy.out
+    pulumi refresh --yes --non-interactive --color=never > deploy.out 2>&1
   fi
-  pulumi up $options > deploy.out
+  pulumi up $options > deploy.out 2>&1
 
   if [ ! $i == '.' ]; then
     cd ..

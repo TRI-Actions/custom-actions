@@ -11,7 +11,7 @@ plan() {
   if [ "$DRIFT_CHECK" == "true" ]; then
 
     pulumi refresh --yes
-    pulumi preview $options --non-interactive > plan.out
+    pulumi preview $options --non-interactive > plan.out 2>&1
 
     INDEX=$(awk '/Note: Objects have changed/{ print NR; exit }' plan.out)
 
@@ -22,7 +22,7 @@ plan() {
     else
       echo No drift detected!
       echo "IN-SYNC" > drift.out
-      pulumi preview $options --non-interactive > plan.out
+      pulumi preview $options --non-interactive > plan.out 2>&1
     fi
   else
     pulumi preview $options --non-interactive > plan.out
