@@ -22,10 +22,10 @@ plan() {
     else
       echo No drift detected!
       echo "IN-SYNC" > drift.out
-      pulumi preview $options --non-interactive > plan.out 2>&1
+      pulumi preview $options --non-interactive 2>&1 | tee plan.out
     fi
   else
-    pulumi preview $options --non-interactive > plan.out
+    pulumi preview $options --non-interactive 2>&1 | tee plan.out
     INDEX=$(awk '/Pulumi used the selected providers/{ print NR; exit }' plan.out)
     sed -i "1,$((INDEX-1)) d" plan.out
     if grep -i 'error\|failed' plan.out; then
