@@ -42,7 +42,7 @@ jobs:
         uses: TRI-Actions/custom-actions/actions/get-aws-credentials@v1
         with:
           account-id: 222222222222
-          federated-role-name: CustomFederatedRole  # optional override
+          target-role-name: MyCrossAccountRole  # optional override of DefaultCrossAccountRole
 
       - name: Verify AWS identity
         run: aws sts get-caller-identity
