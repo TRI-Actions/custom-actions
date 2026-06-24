@@ -34,6 +34,16 @@ inputs:
     description: "Location of JFrog Token in SSM"
     required: false
     type: String
+  environment:
+    description: "Target environment name (e.g., dev, staging, prod). When omitted, environment is inferred from PR label (legacy behavior for multi-branch model)."
+    required: false
+    type: String
+    default: ''
+  app_source_path:
+    description: "Relative path to app source code (for in-app-repo layout). When set, skips git clone and uses local checkout. When omitted, clones app repo from git_url@git_ref in manifest.yaml (legacy standalone behavior)."
+    required: false
+    type: String
+    default: ''
 
 runs:
   using: composite
@@ -227,11 +237,20 @@ runs:
       if: ${{ !contains(github.event.comment.body, 'GithubDeploy') }}
       uses: TRI-Actions/custom-actions/actions/pre-commit-checks@main
 
-    - name: Get label
+    - name: Get environment
       id: get-label
       uses: actions/github-script@v7
       with:
         script: |
+          // Check if environment already set by workflow (for single-branch model)
+          const envFromWorkflow = process.env.environment;
+          if (envFromWorkflow) {
+            console.log(`Using environment from workflow: ${envFromWorkflow}`);
+            core.setOutput('environment', envFromWorkflow);
+            return;
+          }
+
+          // Fallback to label detection (existing multi-branch model behavior)
           const { data: labels } = await github.rest.issues.listLabelsOnIssue({
             owner: context.repo.owner,
             repo: context.repo.repo,
