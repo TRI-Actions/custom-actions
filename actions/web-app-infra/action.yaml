@@ -244,13 +244,19 @@ runs:
         script: |
           // Check if environment already set by workflow (for single-branch model)
           const envFromInput = '${{ inputs.environment }}';
-          if (envFromInput) {
+          if (envFromInput && envFromInput.trim() !== '') {
             console.log(`Using environment from input: ${envFromInput}`);
             core.setOutput('environment', envFromInput);
             return;
           }
 
           // Fallback to label detection (existing multi-branch model behavior)
+          // Only run this if we're in a PR context (issue_comment or pull_request event)
+          if (!context.issue || !context.issue.number) {
+            core.setFailed('No environment specified and not in a PR context to check labels');
+            return;
+          }
+
           const { data: labels } = await github.rest.issues.listLabelsOnIssue({
             owner: context.repo.owner,
             repo: context.repo.repo,
