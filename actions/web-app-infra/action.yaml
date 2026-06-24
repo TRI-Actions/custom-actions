@@ -243,10 +243,10 @@ runs:
       with:
         script: |
           // Check if environment already set by workflow (for single-branch model)
-          const envFromWorkflow = process.env.environment;
-          if (envFromWorkflow) {
-            console.log(`Using environment from workflow: ${envFromWorkflow}`);
-            core.setOutput('environment', envFromWorkflow);
+          const envFromInput = '${{ inputs.environment }}';
+          if (envFromInput) {
+            console.log(`Using environment from input: ${envFromInput}`);
+            core.setOutput('environment', envFromInput);
             return;
           }
 
