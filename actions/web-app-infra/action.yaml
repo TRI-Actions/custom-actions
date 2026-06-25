@@ -237,7 +237,7 @@ runs:
         file_path: manifest.yaml
 
     - name: Run pre-commit checks
-      if: ${{ !contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ !contains(github.event.comment.body, 'GithubDeploy') && (github.event_name == 'pull_request' || github.event_name == 'issue_comment') }}
       uses: TRI-Actions/custom-actions/actions/pre-commit-checks@main
 
     - name: Get environment
