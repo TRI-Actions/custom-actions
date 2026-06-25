@@ -506,6 +506,7 @@ runs:
             const summaryMatch = plan_file.match(/Plan: (\d+) to add, (\d+) to change, (\d+) to destroy\./);
             const planSummary = summaryMatch ? `\n\n**Summary:** ${summaryMatch[0]}` : '';
 
+            // Use raw markdown for details tag since addDetails might not be available
             await core.summary
               .addHeading('Terraform Plan Results', 2)
               .addRaw(`**Format and Style** 🖌 \`${{ steps.fmt.outcome }}\`\n\n`)
@@ -514,7 +515,7 @@ runs:
               .addRaw(planSummary)
               .addHeading('Terraform Plan Output', 3)
               .addRaw(truncated_message ? `⚠️ ${truncated_message}\n\n` : '')
-              .addDetails('Show Plan', plan)
+              .addRaw(`<details><summary>Show Plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`)
               .write()
             console.log('✅ Plan posted to workflow summary')
           }
