@@ -495,19 +495,26 @@ runs:
             plan_file = 'Plan file not found or plan step failed. Check previous step logs.'
           }
 
-          const plan = plan_file.length > 65000 ? "...\n" + plan_file.substring(plan_file.length - 65000) : plan_file
-          const truncated_message = plan_file.length > 65000 ? "Output is too long and was truncated. You can see full plan in " + run_link + "<br /><br />" : ""
+          // For workflow_dispatch summaries, be more aggressive with truncation (GitHub limit ~1MB)
+          const maxLength = context.eventName === 'workflow_dispatch' ? 30000 : 65000
+          const plan = plan_file.length > maxLength ? "...\n" + plan_file.substring(plan_file.length - maxLength) : plan_file
+          const truncated_message = plan_file.length > maxLength ? `Output was truncated to last ${maxLength} characters. [View full plan in workflow logs](${run_url})` : ""
 
           // For workflow_dispatch: post to workflow summary
           if (context.eventName === 'workflow_dispatch') {
+            // Extract resource summary from plan if available
+            const summaryMatch = plan_file.match(/Plan: (\d+) to add, (\d+) to change, (\d+) to destroy\./);
+            const planSummary = summaryMatch ? `\n\n**Summary:** ${summaryMatch[0]}` : '';
+
             await core.summary
               .addHeading('Terraform Plan Results', 2)
               .addRaw(`**Format and Style** 🖌 \`${{ steps.fmt.outcome }}\`\n\n`)
               .addRaw(`**Initialization** ⚙️ \`${{ steps.init.outcome }}\`\n\n`)
               .addRaw(`**Validation** 🤖 \`${{ steps.validate.outcome }}\`\n\n`)
+              .addRaw(planSummary)
               .addHeading('Terraform Plan Output', 3)
-              .addCodeBlock(plan, 'terraform')
-              .addRaw(truncated_message ? `\n\n⚠️ ${truncated_message}` : '')
+              .addRaw(truncated_message ? `⚠️ ${truncated_message}\n\n` : '')
+              .addDetails('Show Plan', plan)
               .write()
             console.log('✅ Plan posted to workflow summary')
           }
