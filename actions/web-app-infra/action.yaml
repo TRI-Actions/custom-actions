@@ -689,7 +689,7 @@ runs:
         triggeredByComment: ${{ contains(github.event.comment.body, 'GithubDeploy') }}
 
     - name: Post after script outputs and update status check
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && always() && (steps.after_scripts.conclusion == 'success' || steps.after_scripts.conclusion == 'failure')
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && always() && (steps.after_scripts.conclusion == 'success' || steps.after_scripts.conclusion == 'failure') && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
       uses: actions/github-script@v7
       with:
         script: |
