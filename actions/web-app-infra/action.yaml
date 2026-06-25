@@ -301,8 +301,7 @@ runs:
     ##############################################
 
     - name: Create before status check
-      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
-      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true'
+      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
       uses: actions/github-script@v7
       id: before_status_check
       with:
@@ -554,7 +553,6 @@ runs:
     ##############################################
 
     - name: Create apply status check
-      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
       if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
       uses: actions/github-script@v7
       id: apply_status_check
@@ -655,8 +653,7 @@ runs:
     ##############################################
 
     - name: Create after status check
-      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true'
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
       uses: actions/github-script@v7
       id: after_status_check
       with:
