@@ -594,7 +594,7 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Terraform - Apply
-      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ (github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy')) || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["true", true]'), env.triggeredByComment)) }}
       id: apply
       shell: bash
       run: |
