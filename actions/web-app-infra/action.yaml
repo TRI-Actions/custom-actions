@@ -704,7 +704,7 @@ runs:
         triggeredByComment: ${{ contains(github.event.comment.body, 'GithubDeploy') }}
 
     - name: Post after script outputs and update status check
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && always() && (steps.after_scripts.conclusion == 'success' || steps.after_scripts.conclusion == 'failure') && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && always() && (steps.after_scripts.conclusion == 'success' || steps.after_scripts.conclusion == 'failure')
       uses: actions/github-script@v7
       with:
         script: |
@@ -718,29 +718,49 @@ runs:
           const formatDate = () => {
             return new Date().toISOString()
           }
-          github.rest.checks.update({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            check_run_id:  '${{ steps.after_status_check.outputs.CHECK_ID }}',
-            status: 'completed',
-            completed_at: formatDate(),
-            conclusion: '${{ steps.after_scripts.conclusion }}'
-          })
-          const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          #### After Scripts Output 🖌
-          <details><summary>After Scripts Output</summary>
 
-          ~~~
-          ${logs}
-          ~~~
+          const run_url = process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID
+          const maxLength = 30000
+          const std_out = logs.length > maxLength ? "...\n" + logs.substring(logs.length - maxLength) : logs
+          const truncated_message = logs.length > maxLength ? `Output was truncated to last ${maxLength} characters. [View full logs](${run_url})` : ""
 
-          </details>`;
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          })
+          // For workflow_dispatch: post to workflow summary
+          if (context.eventName === 'workflow_dispatch') {
+            await core.summary
+              .addHeading('After Scripts Output', 3)
+              .addRaw(truncated_message ? `⚠️ ${truncated_message}\n\n` : '')
+              .addRaw(`<details><summary>Show After Scripts Output</summary>\n\n\`\`\`\n${std_out}\n\`\`\`\n\n</details>`)
+              .write()
+            console.log('✅ After scripts output posted to workflow summary')
+          }
+          // For PR events: update check and post comment
+          else {
+            github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id:  '${{ steps.after_status_check.outputs.CHECK_ID }}',
+              status: 'completed',
+              completed_at: formatDate(),
+              conclusion: '${{ steps.after_scripts.conclusion }}'
+            })
+
+            const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            #### After Scripts Output 🖌
+            <details><summary>After Scripts Output</summary>
+
+            ~~~
+            ${logs}
+            ~~~
+
+            </details>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+          }
     - name: Merge Branch
       uses: actions/github-script@v7
       if: ${{ job.status == 'success' && github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
