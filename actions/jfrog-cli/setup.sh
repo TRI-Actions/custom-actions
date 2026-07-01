@@ -32,8 +32,18 @@ fi
 
 echo "::add-mask::$ID_TOKEN"
 
+# Debug: Show token claims for troubleshooting
+echo "ID token claims (for debugging identity mapping):"
+ID_PAYLOAD=$(echo "$ID_TOKEN" | cut -d. -f2)
+PAD=$(( 4 - ${#ID_PAYLOAD} % 4 ))
+[ $PAD -lt 4 ] && ID_PAYLOAD="${ID_PAYLOAD}$(printf '=%.0s' $(seq 1 $PAD))"
+echo "$ID_PAYLOAD" | tr '_-' '/+' | base64 -d | jq '{sub, aud, repository, event_name, ref, job_workflow_ref, repository_owner}'
+
 # Exchange OIDC token for JFrog access token using CLI
 echo "Exchanging OIDC token for JFrog access token..."
+echo "Provider: $OIDC_PROVIDER"
+echo "Audience: $AUDIENCE"
+echo "URL: $JFROG_URL"
 EXCHANGE_ARGS=("eot" "$OIDC_PROVIDER" "$ID_TOKEN" "--url" "$JFROG_URL")
 
 # Add audience if provided
