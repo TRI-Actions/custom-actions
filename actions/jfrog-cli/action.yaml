@@ -58,6 +58,12 @@ outputs:
   server-id:
     description: "Server ID that was configured in JFrog CLI"
     value: ${{ inputs.server-id }}
+  oidc-token:
+    description: "JFrog access token obtained from OIDC exchange"
+    value: ${{ steps.setup.outputs.oidc-token }}
+  oidc-user:
+    description: "JFrog username extracted from the OIDC token"
+    value: ${{ steps.setup.outputs.oidc-user }}
 
 runs:
   using: "composite"
@@ -69,36 +75,15 @@ runs:
         GITHUB_ACTION_PATH: ${{ github.action_path }}
 
     - name: Install and configure JFrog CLI
+      id: setup
       shell: bash
+      run: setup.sh
       env:
         JFROG_CLI_VERSION: ${{ inputs.jfrog-cli-version }}
         JFROG_URL: ${{ inputs.jfrog-url }}
         OIDC_PROVIDER: ${{ inputs.oidc-provider }}
         AUDIENCE: ${{ inputs.audience }}
         SERVER_ID: ${{ inputs.server-id }}
-      run: |
-        # Install JFrog CLI
-        if [ "$JFROG_CLI_VERSION" = "latest" ]; then
-          echo "Installing latest version of JFrog CLI..."
-          curl -fL https://install-cli.jfrog.io | sh
-        else
-          echo "Installing JFrog CLI version $JFROG_CLI_VERSION..."
-          curl -fL "https://releases.jfrog.io/artifactory/jfrog-cli/v2-jf/${JFROG_CLI_VERSION}/jfrog-cli-linux-amd64/jf" -o jf
-          chmod +x jf
-          sudo mv jf /usr/local/bin/jf
-        fi
-
-        jf -v
-
-        # Configure with OIDC
-        jf config add "$SERVER_ID" \
-          --url="$JFROG_URL" \
-          --oidc-provider-name="$OIDC_PROVIDER" \
-          --oidc-audience="$AUDIENCE" \
-          --interactive=false
-
-        echo "JFrog CLI configured successfully with OIDC!"
-        jf config show
 
     - name: Push Python packages
       if: ${{ inputs.action == 'push-python' }}
