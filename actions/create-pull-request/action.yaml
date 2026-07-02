@@ -22,9 +22,9 @@ inputs:
     required: false
     default: ""
   commit-message:
-    description: "Commit message"
+    description: "Commit message (defaults to PR title if not provided)"
     required: false
-    default: ${{ inputs.title }}
+    default: ""
   labels:
     description: "Labels to add (comma-separated)"
     required: false

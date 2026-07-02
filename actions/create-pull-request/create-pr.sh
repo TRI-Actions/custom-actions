@@ -36,6 +36,11 @@ fi
 echo "Changes to commit:"
 git diff --cached --stat
 
+# Use title as commit message if not provided
+if [ -z "$COMMIT_MESSAGE" ]; then
+  COMMIT_MESSAGE="$PR_TITLE"
+fi
+
 # Create commit message
 FULL_COMMIT_MESSAGE="$COMMIT_MESSAGE"
 if [ "$SIGNOFF" = "true" ]; then
