@@ -1,0 +1,108 @@
+name: "Create Pull Request"
+description: "Creates a pull request for changes in the working directory"
+
+inputs:
+  token:
+    description: "GitHub token with pull-requests write permission"
+    required: false
+    default: ${{ github.token }}
+  branch:
+    description: "Branch name to create/update"
+    required: false
+    default: "automated-changes"
+  base:
+    description: "Base branch for the pull request"
+    required: false
+    default: ${{ github.event.repository.default_branch }}
+  title:
+    description: "Pull request title"
+    required: true
+  body:
+    description: "Pull request body/description"
+    required: false
+    default: ""
+  commit-message:
+    description: "Commit message (defaults to PR title if not provided)"
+    required: false
+    default: ""
+  labels:
+    description: "Labels to add (comma-separated)"
+    required: false
+    default: ""
+  assignees:
+    description: "Assignees (comma-separated usernames)"
+    required: false
+    default: ""
+  reviewers:
+    description: "Reviewers (comma-separated usernames)"
+    required: false
+    default: ""
+  draft:
+    description: "Create as draft PR"
+    required: false
+    default: "false"
+  delete-branch:
+    description: "Delete branch when PR is closed/merged"
+    required: false
+    default: "false"
+  add-paths:
+    description: "Paths to add (space-separated). Default: all changes"
+    required: false
+    default: "."
+  author:
+    description: "Commit author (name <email>)"
+    required: false
+    default: "${{ github.actor }} <${{ github.actor }}@users.noreply.github.com>"
+  committer:
+    description: "Commit committer (name <email>)"
+    required: false
+    default: "github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>"
+  signoff:
+    description: "Add Signed-off-by line"
+    required: false
+    default: "false"
+
+outputs:
+  pull-request-number:
+    description: "Pull request number"
+    value: ${{ steps.create-pr.outputs.pr_number }}
+  pull-request-url:
+    description: "Pull request URL"
+    value: ${{ steps.create-pr.outputs.pr_url }}
+  pull-request-operation:
+    description: "Operation performed: created, updated, or none"
+    value: ${{ steps.create-pr.outputs.operation }}
+  pull-request-head-sha:
+    description: "Head commit SHA"
+    value: ${{ steps.create-pr.outputs.head_sha }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set GitHub Path
+      shell: bash
+      run: echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+
+    - name: Create Pull Request
+      id: create-pr
+      shell: bash
+      run: create-pr.sh
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        BRANCH_NAME: ${{ inputs.branch }}
+        BASE_BRANCH: ${{ inputs.base }}
+        PR_TITLE: ${{ inputs.title }}
+        PR_BODY: ${{ inputs.body }}
+        COMMIT_MESSAGE: ${{ inputs.commit-message }}
+        LABELS: ${{ inputs.labels }}
+        ASSIGNEES: ${{ inputs.assignees }}
+        REVIEWERS: ${{ inputs.reviewers }}
+        DRAFT: ${{ inputs.draft }}
+        DELETE_BRANCH: ${{ inputs.delete-branch }}
+        ADD_PATHS: ${{ inputs.add-paths }}
+        AUTHOR: ${{ inputs.author }}
+        COMMITTER: ${{ inputs.committer }}
+        SIGNOFF: ${{ inputs.signoff }}
+        REPO: ${{ github.repository }}

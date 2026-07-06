@@ -1,0 +1,172 @@
+# Example GitHub Actions workflow using the jfrog-cli action
+# This file is for reference only - copy the relevant parts to your own workflow
+
+name: JFrog CLI Examples
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  id-token: write  # Required for OIDC authentication
+  contents: read
+
+jobs:
+  setup-only:
+    name: Setup and use CLI manually
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup JFrog CLI
+        uses: TRI-Actions/custom-actions/actions/jfrog-cli@main
+        with:
+          action: setup
+          oidc-provider: 'ie-tf-modules'
+
+      - name: Use JFrog CLI
+        run: |
+          jf --version
+          jf config show
+          jf rt ping
+
+  push-python:
+    name: Build and push Python package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Build Python package
+        run: |
+          pip install build
+          python -m build
+          ls -la dist/
+
+      - name: Push to JFrog
+        uses: TRI-Actions/custom-actions/actions/jfrog-cli@main
+        with:
+          action: push-python
+          oidc-provider: 'ie-tf-modules'
+          source-path: 'dist'
+          target-repo: 'my-pypi-dev-local'
+          build-name: 'my-python-project'
+          module-name: 'python-${{ github.ref_name }}'
+          properties: 'git.branch=${{ github.ref_name }};git.commit=${{ github.sha }}'
+
+  push-npm:
+    name: Build and push npm package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'lts/*'
+
+      - name: Build and pack
+        run: |
+          npm install
+          npm run build
+          npm pack
+          ls -la *.tgz
+
+      - name: Push to JFrog
+        uses: TRI-Actions/custom-actions/actions/jfrog-cli@main
+        with:
+          action: push-npm
+          oidc-provider: 'ie-tf-modules'
+          source-path: '.'
+          target-repo: 'my-npm-dev-local'
+          build-name: 'my-npm-project'
+          module-name: 'npm-${{ github.ref_name }}'
+          properties: 'git.branch=${{ github.ref_name }};git.commit=${{ github.sha }}'
+
+  complete-release:
+    name: Complete release workflow example
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+
+      - name: Install and build
+        run: |
+          yarn install --frozen-lockfile
+          npx projen release
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "tag=v$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Python distribution
+        run: npx projen package:python
+
+      - name: Push Python to JFrog
+        uses: TRI-Actions/custom-actions/actions/jfrog-cli@main
+        with:
+          action: push-python
+          oidc-provider: 'ie-tf-modules'
+          source-path: 'dist/python'
+          target-repo: 'my-pypi-dev-local'
+          build-name: 'my-project-pypi'
+          build-number: '${{ github.run_id }}-${{ github.run_attempt }}'
+          module-name: 'python-${{ steps.version.outputs.version }}'
+          properties: 'git.tag=${{ steps.version.outputs.tag }}'
+
+      - name: Push npm to JFrog
+        uses: TRI-Actions/custom-actions/actions/jfrog-cli@main
+        with:
+          action: push-npm
+          oidc-provider: 'ie-tf-modules'
+          source-path: 'dist/js'
+          target-repo: 'my-npm-dev-local'
+          build-name: 'my-project-npm'
+          build-number: '${{ github.run_id }}-${{ github.run_attempt }}'
+          module-name: 'npm-${{ steps.version.outputs.version }}'
+          properties: 'git.tag=${{ steps.version.outputs.tag }}'
+
+  custom-properties:
+    name: Upload with custom properties
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: |
+          mkdir -p dist
+          echo "artifact content" > dist/my-artifact.txt
+
+      - name: Setup JFrog CLI
+        uses: TRI-Actions/custom-actions/actions/jfrog-cli@main
+        with:
+          action: setup
+          oidc-provider: 'ie-tf-modules'
+
+      - name: Upload with properties
+        run: |
+          jf rt upload \
+            "dist/*" \
+            "generic-local/my-app/${{ github.sha }}/" \
+            --build-name=my-custom-build \
+            --build-number=${{ github.run_number }} \
+            --props="environment=dev;version=${{ github.sha }};branch=${{ github.ref_name }}"
+
+          jf rt build-add-git my-custom-build ${{ github.run_number }}
+          jf rt build-publish my-custom-build ${{ github.run_number }}
