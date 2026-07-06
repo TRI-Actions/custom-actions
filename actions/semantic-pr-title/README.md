@@ -4,13 +4,13 @@ Validates that pull request titles follow the [Conventional Commits](https://www
 
 ## Features
 
-✅ Validates PR titles against conventional commits format  
-✅ Customizable types, scopes, and validation rules  
-✅ Support for breaking changes (`!` or `BREAKING CHANGE:`)  
-✅ Skip validation for specific labels  
-✅ WIP prefix support  
-✅ Detailed error messages  
-✅ Extracts type, scope, and subject as outputs  
+✅ Validates PR titles against conventional commits format
+✅ Customizable types, scopes, and validation rules
+✅ Support for breaking changes (`!` or `BREAKING CHANGE:`)
+✅ Skip validation for specific labels
+✅ WIP prefix support
+✅ Detailed error messages
+✅ Extracts type, scope, and subject as outputs
 
 ## Usage
 

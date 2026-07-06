@@ -156,7 +156,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
-      
+
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:
@@ -185,7 +185,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v6
-      
+
       - name: Download build artifacts
         uses: actions/download-artifact@v8
         with:

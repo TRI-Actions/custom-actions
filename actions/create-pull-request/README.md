@@ -4,12 +4,12 @@ Automatically creates or updates a pull request for changes made during a workfl
 
 ## Features
 
-✅ **Auto-commit changes** in the working directory  
-✅ **Create or update PRs** intelligently  
-✅ **Customizable commit metadata** (author, committer, signoff)  
-✅ **Add labels, assignees, reviewers** automatically  
-✅ **Draft PR support**  
-✅ **Uses GitHub CLI** for reliable PR operations  
+✅ **Auto-commit changes** in the working directory
+✅ **Create or update PRs** intelligently
+✅ **Customizable commit metadata** (author, committer, signoff)
+✅ **Add labels, assignees, reviewers** automatically
+✅ **Draft PR support**
+✅ **Uses GitHub CLI** for reliable PR operations
 
 ## Usage
 
@@ -235,7 +235,7 @@ Note: The default `GITHUB_TOKEN` doesn't trigger workflows on PRs it creates (to
 branch: "automated-updates"
 ```
 
-Pros: Updates same PR on every run  
+Pros: Updates same PR on every run
 Cons: Multiple updates collapse into one PR
 
 ### Dynamic Branch Names
@@ -244,7 +244,7 @@ Cons: Multiple updates collapse into one PR
 branch: "update-${{ github.run_id }}"
 ```
 
-Pros: Creates separate PR for each run  
+Pros: Creates separate PR for each run
 Cons: Can create many PRs
 
 ### Date-based Branches
