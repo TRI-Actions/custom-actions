@@ -25,35 +25,46 @@ echo "  Source: $SOURCE_PATH"
 echo "  Target: $TARGET_REPO"
 echo "  Build: $BUILD_NAME#$BUILD_NUMBER"
 
-# Build the upload command
-UPLOAD_CMD="jf rt upload"
-UPLOAD_CMD="$UPLOAD_CMD --server-id=${SERVER_ID:-default}"
-UPLOAD_CMD="$UPLOAD_CMD --build-name=$BUILD_NAME"
-UPLOAD_CMD="$UPLOAD_CMD --build-number=$BUILD_NUMBER"
+# Store current directory for git operations
+ORIGINAL_DIR=$(pwd)
+
+# Change to source directory
+cd "$SOURCE_PATH"
+
+# Build base upload command arguments
+UPLOAD_ARGS=(
+  "--server-id=${SERVER_ID:-default}"
+  "--build-name=$BUILD_NAME"
+  "--build-number=$BUILD_NUMBER"
+)
 
 # Add module name if provided
 if [ -n "${MODULE_NAME:-}" ]; then
-  UPLOAD_CMD="$UPLOAD_CMD --module=$MODULE_NAME"
+  UPLOAD_ARGS+=("--module=$MODULE_NAME")
 fi
 
 # Add properties if provided
 if [ -n "${PROPERTIES:-}" ]; then
-  UPLOAD_CMD="$UPLOAD_CMD --props=$PROPERTIES"
+  UPLOAD_ARGS+=("--props=$PROPERTIES")
 fi
 
 # Upload tgz files
-if compgen -G "$SOURCE_PATH/*.tgz" > /dev/null; then
+if ls *.tgz 1> /dev/null 2>&1; then
   echo "Uploading .tgz files..."
-  eval "$UPLOAD_CMD \"$SOURCE_PATH/*.tgz\" \"$TARGET_REPO/\""
+  jf rt upload "*.tgz" "$TARGET_REPO/" "${UPLOAD_ARGS[@]}"
 else
   echo "ERROR: No .tgz files found in $SOURCE_PATH"
+  cd "$ORIGINAL_DIR"
   exit 1
 fi
+
+# Go back to original directory for git operations
+cd "$ORIGINAL_DIR"
 
 # Add git info if requested
 if [ "${ADD_GIT_INFO:-true}" = "true" ]; then
   echo "Adding git info to build..."
-  jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER" || {
+  jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER" "${GIT_REPO_PATH:-.}" || {
     echo "Warning: Failed to add git info (continuing anyway)"
   }
 fi
