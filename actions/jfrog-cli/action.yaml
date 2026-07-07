@@ -54,6 +54,10 @@ inputs:
     description: "Path to git repository for build-add-git (default: workspace root)"
     default: "."
     required: false
+  debug:
+    description: "Enable debug output"
+    default: "false"
+    required: false
 
 outputs:
   jfrog-url:
@@ -104,6 +108,7 @@ runs:
         ADD_GIT_INFO: ${{ inputs.add-git-info }}
         GIT_REPO_PATH: ${{ inputs.git-repo-path }}
         SERVER_ID: ${{ inputs.server-id }}
+        DEBUG: ${{ inputs.debug }}
 
     - name: Push npm packages
       if: ${{ inputs.action == 'push-npm' }}
@@ -120,3 +125,4 @@ runs:
         ADD_GIT_INFO: ${{ inputs.add-git-info }}
         GIT_REPO_PATH: ${{ inputs.git-repo-path }}
         SERVER_ID: ${{ inputs.server-id }}
+        DEBUG: ${{ inputs.debug }}

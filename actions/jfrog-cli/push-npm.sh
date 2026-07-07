@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Enable debug mode if requested
+if [ "${DEBUG:-false}" = "true" ]; then
+  set -x
+  echo "=== DEBUG MODE ENABLED ==="
+fi
+
 # Validate required inputs
 if [ -z "${SOURCE_PATH:-}" ]; then
   echo "ERROR: source-path is required for push-npm action"
@@ -27,9 +33,19 @@ echo "  Build: $BUILD_NAME#$BUILD_NUMBER"
 
 # Store current directory for git operations
 ORIGINAL_DIR=$(pwd)
+if [ "${DEBUG:-false}" = "true" ]; then
+  echo "DEBUG: Original directory: $ORIGINAL_DIR"
+  echo "DEBUG: About to cd to: $SOURCE_PATH"
+fi
 
 # Change to source directory
 cd "$SOURCE_PATH"
+
+if [ "${DEBUG:-false}" = "true" ]; then
+  echo "DEBUG: Current directory after cd: $(pwd)"
+  echo "DEBUG: Files in directory:"
+  ls -la
+fi
 
 # Build base upload command arguments
 UPLOAD_ARGS=(
@@ -61,9 +77,19 @@ fi
 # Go back to original directory for git operations
 cd "$ORIGINAL_DIR"
 
+if [ "${DEBUG:-false}" = "true" ]; then
+  echo "DEBUG: Back to original directory: $(pwd)"
+  echo "DEBUG: Git repo path: ${GIT_REPO_PATH:-.}"
+  echo "DEBUG: Checking if git repo exists:"
+  ls -la "${GIT_REPO_PATH:-.}" || echo "DEBUG: Directory not found or not accessible"
+fi
+
 # Add git info if requested
 if [ "${ADD_GIT_INFO:-true}" = "true" ]; then
   echo "Adding git info to build..."
+  if [ "${DEBUG:-false}" = "true" ]; then
+    echo "DEBUG: Running: jf rt build-add-git $BUILD_NAME $BUILD_NUMBER ${GIT_REPO_PATH:-.}"
+  fi
   jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER" "${GIT_REPO_PATH:-.}" || {
     echo "Warning: Failed to add git info (continuing anyway)"
   }
