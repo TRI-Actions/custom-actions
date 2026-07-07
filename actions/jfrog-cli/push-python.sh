@@ -60,7 +60,7 @@ fi
 
 # Add properties if provided
 if [ -n "${PROPERTIES:-}" ]; then
-  UPLOAD_ARGS+=("--props=$PROPERTIES")
+  UPLOAD_ARGS+=("--target-props=$PROPERTIES")
 fi
 
 # Upload wheel files
