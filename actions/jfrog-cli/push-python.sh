@@ -38,7 +38,7 @@ if [ "${DEBUG:-false}" = "true" ]; then
   echo "DEBUG: About to cd to: $SOURCE_PATH"
 fi
 
-# Change to source directory (should contain dist/ with built packages)
+# Change to source directory (should contain .whl and .tar.gz files)
 cd "$SOURCE_PATH"
 
 if [ "${DEBUG:-false}" = "true" ]; then
@@ -47,16 +47,10 @@ if [ "${DEBUG:-false}" = "true" ]; then
   ls -la
 fi
 
-# Check if dist directory exists with packages
-if [ ! -d "dist" ]; then
-  echo "ERROR: dist/ directory not found in $SOURCE_PATH"
-  echo "Note: source-path should point to directory containing dist/ with .whl and .tar.gz files"
-  cd "$ORIGINAL_DIR"
-  exit 1
-fi
-
-if ! ls dist/*.whl dist/*.tar.gz 1> /dev/null 2>&1; then
-  echo "ERROR: No .whl or .tar.gz files found in $SOURCE_PATH/dist/"
+# Check if any Python packages exist
+if ! ls *.whl *.tar.gz 1> /dev/null 2>&1; then
+  echo "ERROR: No .whl or .tar.gz files found in $SOURCE_PATH"
+  echo "Note: source-path should point to directory containing .whl and .tar.gz files (e.g., dist/python)"
   cd "$ORIGINAL_DIR"
   exit 1
 fi
@@ -100,7 +94,7 @@ fi
 # Build twine upload command arguments
 TWINE_ARGS=(
   "upload"
-  "dist/*"
+  "*"
   "--build-name=$BUILD_NAME"
   "--build-number=$BUILD_NUMBER"
 )

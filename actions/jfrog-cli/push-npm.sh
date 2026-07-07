@@ -47,12 +47,32 @@ if [ "${DEBUG:-false}" = "true" ]; then
   ls -la
 fi
 
-# Check if package.json exists
-if [ ! -f "package.json" ]; then
-  echo "ERROR: package.json not found in $SOURCE_PATH"
-  echo "Note: For npm publish, source-path should point to directory with package.json, not dist/js"
+# Check if we have package.json (publish from source) or .tgz (publish tarball)
+HAS_PACKAGE_JSON=false
+HAS_TARBALL=false
+
+if [ -f "package.json" ]; then
+  HAS_PACKAGE_JSON=true
+fi
+
+if ls *.tgz 1> /dev/null 2>&1; then
+  HAS_TARBALL=true
+  TARBALL=$(ls *.tgz | head -1)
+fi
+
+if [ "$HAS_PACKAGE_JSON" = "false" ] && [ "$HAS_TARBALL" = "false" ]; then
+  echo "ERROR: Neither package.json nor .tgz file found in $SOURCE_PATH"
+  echo "Note: source-path should point to either:"
+  echo "  - Directory with package.json (to publish from source)"
+  echo "  - Directory with .tgz file (to publish pre-built tarball)"
   cd "$ORIGINAL_DIR"
   exit 1
+fi
+
+if [ "${DEBUG:-false}" = "true" ]; then
+  echo "DEBUG: Has package.json: $HAS_PACKAGE_JSON"
+  echo "DEBUG: Has tarball: $HAS_TARBALL"
+  [ "$HAS_TARBALL" = "true" ] && echo "DEBUG: Tarball: $TARBALL"
 fi
 
 # Go back to original directory for git operations first
@@ -103,11 +123,20 @@ if [ -n "${MODULE_NAME:-}" ]; then
 fi
 
 # Publish package (this collects build info including the git info we just added)
-echo "Publishing npm package..."
-if [ "${DRY_RUN:-false}" = "true" ]; then
-  echo "[DRY-RUN] Would execute: jf npm publish ${PUBLISH_ARGS[*]}"
+if [ "$HAS_TARBALL" = "true" ]; then
+  echo "Publishing npm package from tarball: $TARBALL"
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf npm publish $TARBALL ${PUBLISH_ARGS[*]}"
+  else
+    jf npm publish "$TARBALL" "${PUBLISH_ARGS[@]}"
+  fi
 else
-  jf npm publish "${PUBLISH_ARGS[@]}"
+  echo "Publishing npm package from source..."
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf npm publish ${PUBLISH_ARGS[*]}"
+  else
+    jf npm publish "${PUBLISH_ARGS[@]}"
+  fi
 fi
 
 # Go back to original directory
