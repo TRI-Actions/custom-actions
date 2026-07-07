@@ -25,7 +25,7 @@ inputs:
     default: "default"
     required: false
   source-path:
-    description: "Source path for artifacts to upload (required for push actions)"
+    description: "Source path for artifacts (required for push actions). For push-python: path to dist files. For push-npm: path to directory with package.json"
     required: false
   target-repo:
     description: "Target JFrog repository (required for push actions)"
