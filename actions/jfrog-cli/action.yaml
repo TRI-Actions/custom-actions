@@ -58,6 +58,10 @@ inputs:
     description: "Enable debug output"
     default: "false"
     required: false
+  dry-run:
+    description: "Print commands without executing them"
+    default: "false"
+    required: false
 
 outputs:
   jfrog-url:
@@ -109,6 +113,7 @@ runs:
         GIT_REPO_PATH: ${{ inputs.git-repo-path }}
         SERVER_ID: ${{ inputs.server-id }}
         DEBUG: ${{ inputs.debug }}
+        DRY_RUN: ${{ inputs.dry-run }}
 
     - name: Push npm packages
       if: ${{ inputs.action == 'push-npm' }}
@@ -126,3 +131,4 @@ runs:
         GIT_REPO_PATH: ${{ inputs.git-repo-path }}
         SERVER_ID: ${{ inputs.server-id }}
         DEBUG: ${{ inputs.debug }}
+        DRY_RUN: ${{ inputs.dry-run }}

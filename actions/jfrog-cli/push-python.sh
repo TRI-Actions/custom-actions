@@ -49,7 +49,6 @@ fi
 
 # Build base upload command arguments
 UPLOAD_ARGS=(
-  "--server-id=${SERVER_ID:-default}"
   "--build-name=$BUILD_NAME"
   "--build-number=$BUILD_NUMBER"
 )
@@ -67,7 +66,11 @@ fi
 # Upload wheel files
 if ls *.whl 1> /dev/null 2>&1; then
   echo "Uploading .whl files..."
-  jf rt upload "*.whl" "$TARGET_REPO/" "${UPLOAD_ARGS[@]}"
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf rt upload \"*.whl\" \"$TARGET_REPO/\" ${UPLOAD_ARGS[*]}"
+  else
+    jf rt upload "*.whl" "$TARGET_REPO/" "${UPLOAD_ARGS[@]}"
+  fi
 else
   echo "No .whl files found in $SOURCE_PATH"
 fi
@@ -75,7 +78,11 @@ fi
 # Upload source distributions
 if ls *.tar.gz 1> /dev/null 2>&1; then
   echo "Uploading .tar.gz files..."
-  jf rt upload "*.tar.gz" "$TARGET_REPO/" "${UPLOAD_ARGS[@]}"
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf rt upload \"*.tar.gz\" \"$TARGET_REPO/\" ${UPLOAD_ARGS[*]}"
+  else
+    jf rt upload "*.tar.gz" "$TARGET_REPO/" "${UPLOAD_ARGS[@]}"
+  fi
 else
   echo "No .tar.gz files found in $SOURCE_PATH"
 fi
@@ -96,16 +103,24 @@ if [ "${ADD_GIT_INFO:-true}" = "true" ]; then
   if [ "${DEBUG:-false}" = "true" ]; then
     echo "DEBUG: Running: jf rt build-add-git $BUILD_NAME $BUILD_NUMBER ${GIT_REPO_PATH:-.}"
   fi
-  jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER" "${GIT_REPO_PATH:-.}" || {
-    echo "Warning: Failed to add git info (continuing anyway)"
-  }
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf rt build-add-git \"$BUILD_NAME\" \"$BUILD_NUMBER\" \"${GIT_REPO_PATH:-.}\""
+  else
+    jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER" "${GIT_REPO_PATH:-.}" || {
+      echo "Warning: Failed to add git info (continuing anyway)"
+    }
+  fi
 fi
 
 # Publish build info if requested
 if [ "${PUBLISH_BUILD_INFO:-true}" = "true" ]; then
   echo "Publishing build info..."
-  jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
-  echo "Build info published successfully"
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf rt build-publish \"$BUILD_NAME\" \"$BUILD_NUMBER\""
+  else
+    jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
+    echo "Build info published successfully"
+  fi
 fi
 
 echo "Python packages uploaded successfully!"

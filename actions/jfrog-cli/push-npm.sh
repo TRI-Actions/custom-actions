@@ -49,7 +49,6 @@ fi
 
 # Build base upload command arguments
 UPLOAD_ARGS=(
-  "--server-id=${SERVER_ID:-default}"
   "--build-name=$BUILD_NAME"
   "--build-number=$BUILD_NUMBER"
 )
@@ -67,7 +66,11 @@ fi
 # Upload tgz files
 if ls *.tgz 1> /dev/null 2>&1; then
   echo "Uploading .tgz files..."
-  jf rt upload "*.tgz" "$TARGET_REPO/" "${UPLOAD_ARGS[@]}"
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf rt upload \"*.tgz\" \"$TARGET_REPO/\" ${UPLOAD_ARGS[*]}"
+  else
+    jf rt upload "*.tgz" "$TARGET_REPO/" "${UPLOAD_ARGS[@]}"
+  fi
 else
   echo "ERROR: No .tgz files found in $SOURCE_PATH"
   cd "$ORIGINAL_DIR"
@@ -90,16 +93,24 @@ if [ "${ADD_GIT_INFO:-true}" = "true" ]; then
   if [ "${DEBUG:-false}" = "true" ]; then
     echo "DEBUG: Running: jf rt build-add-git $BUILD_NAME $BUILD_NUMBER ${GIT_REPO_PATH:-.}"
   fi
-  jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER" "${GIT_REPO_PATH:-.}" || {
-    echo "Warning: Failed to add git info (continuing anyway)"
-  }
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf rt build-add-git \"$BUILD_NAME\" \"$BUILD_NUMBER\" \"${GIT_REPO_PATH:-.}\""
+  else
+    jf rt build-add-git "$BUILD_NAME" "$BUILD_NUMBER" "${GIT_REPO_PATH:-.}" || {
+      echo "Warning: Failed to add git info (continuing anyway)"
+    }
+  fi
 fi
 
 # Publish build info if requested
 if [ "${PUBLISH_BUILD_INFO:-true}" = "true" ]; then
   echo "Publishing build info..."
-  jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
-  echo "Build info published successfully"
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: jf rt build-publish \"$BUILD_NAME\" \"$BUILD_NUMBER\""
+  else
+    jf rt build-publish "$BUILD_NAME" "$BUILD_NUMBER"
+    echo "Build info published successfully"
+  fi
 fi
 
 echo "npm packages uploaded successfully!"
