@@ -80,6 +80,18 @@ if [ "${ADD_GIT_INFO:-true}" = "true" ]; then
   fi
 fi
 
+# Install twine if not available
+if ! command -v twine &> /dev/null; then
+  echo "Installing twine..."
+  if [ "${DRY_RUN:-false}" = "true" ]; then
+    echo "[DRY-RUN] Would execute: pip install twine"
+  else
+    pip install twine --quiet
+  fi
+else
+  echo "Twine already installed"
+fi
+
 # Go back to package directory
 cd "$SOURCE_PATH"
 
