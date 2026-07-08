@@ -1,0 +1,47 @@
+name: "Upload GitHub Release Asset"
+description: "Uploads files to a GitHub release"
+
+inputs:
+  token:
+    description: "GitHub token with contents write permission"
+    required: false
+    default: ${{ github.token }}
+  tag:
+    description: "Release tag to upload to (e.g., v1.0.0)"
+    required: true
+  files:
+    description: "Files to upload (space-separated glob patterns, e.g., 'dist/*.tgz dist/*.whl')"
+    required: true
+  clobber:
+    description: "Overwrite existing assets with the same name"
+    required: false
+    default: "true"
+  repo:
+    description: "Repository in format owner/repo (defaults to current repository)"
+    required: false
+    default: ${{ github.repository }}
+
+outputs:
+  uploaded-files:
+    description: "List of uploaded files"
+    value: ${{ steps.upload.outputs.uploaded_files }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set GitHub Path
+      shell: bash
+      run: echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+
+    - name: Upload assets
+      id: upload
+      shell: bash
+      run: upload.sh
+      env:
+        GITHUB_TOKEN: ${{ inputs.token }}
+        RELEASE_TAG: ${{ inputs.tag }}
+        FILES: ${{ inputs.files }}
+        CLOBBER: ${{ inputs.clobber }}
+        REPO: ${{ inputs.repo }}
