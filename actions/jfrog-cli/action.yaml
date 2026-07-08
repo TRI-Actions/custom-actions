@@ -1,0 +1,134 @@
+name: "JFrog CLI"
+description: "Installs JFrog CLI, configures OIDC authentication, and performs package operations"
+
+inputs:
+  action:
+    description: "Action to perform: 'setup', 'push-python', or 'push-npm'"
+    required: true
+  jfrog-url:
+    description: "JFrog platform base URL"
+    default: "https://toyotaresearchinstitute.jfrog.io"
+    required: false
+  oidc-provider:
+    description: "Name of the OIDC provider configured in JFrog"
+    required: true
+  audience:
+    description: "OIDC audience to request from GitHub. Must match the audience configured on the JFrog provider."
+    default: "jfrog-github-oidc"
+    required: false
+  jfrog-cli-version:
+    description: "Version of JFrog CLI to install (e.g., '2.52.0' or 'latest')"
+    default: "latest"
+    required: false
+  server-id:
+    description: "Server ID for the JFrog CLI configuration"
+    default: "default"
+    required: false
+  source-path:
+    description: "Source path for artifacts (required for push actions). For push-python: path to directory with .whl/.tar.gz files (e.g., dist/python). For push-npm: path to directory with package.json (e.g., .)"
+    required: false
+  target-repo:
+    description: "Target JFrog repository (required for push actions)"
+    required: false
+  build-name:
+    description: "Build name for JFrog build info (required for push actions)"
+    required: false
+  build-number:
+    description: "Build number for JFrog build info (defaults to GITHUB_RUN_ID-GITHUB_RUN_ATTEMPT)"
+    required: false
+  module-name:
+    description: "Module name for the artifacts (defaults to package-type-version)"
+    required: false
+  properties:
+    description: "Additional properties to attach to artifacts (e.g., 'key1=value1;key2=value2')"
+    required: false
+  publish-build-info:
+    description: "Whether to publish build info after upload (default: true)"
+    default: "true"
+    required: false
+  add-git-info:
+    description: "Whether to add git info to build (default: true)"
+    default: "true"
+    required: false
+  git-repo-path:
+    description: "Path to git repository for build-add-git (default: workspace root)"
+    default: "."
+    required: false
+  debug:
+    description: "Enable debug output"
+    default: "false"
+    required: false
+  dry-run:
+    description: "Print commands without executing them"
+    default: "false"
+    required: false
+
+outputs:
+  jfrog-url:
+    description: "JFrog platform URL that was configured"
+    value: ${{ inputs.jfrog-url }}
+  server-id:
+    description: "Server ID that was configured in JFrog CLI"
+    value: ${{ inputs.server-id }}
+  oidc-token:
+    description: "JFrog access token obtained from OIDC exchange"
+    value: ${{ steps.setup.outputs.oidc-token }}
+  oidc-user:
+    description: "JFrog username extracted from the OIDC token"
+    value: ${{ steps.setup.outputs.oidc-user }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set GitHub Path
+      shell: bash
+      run: echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+
+    - name: Install and configure JFrog CLI
+      id: setup
+      shell: bash
+      run: setup.sh
+      env:
+        JFROG_CLI_VERSION: ${{ inputs.jfrog-cli-version }}
+        JFROG_URL: ${{ inputs.jfrog-url }}
+        OIDC_PROVIDER: ${{ inputs.oidc-provider }}
+        AUDIENCE: ${{ inputs.audience }}
+        SERVER_ID: ${{ inputs.server-id }}
+
+    - name: Push Python packages
+      if: ${{ inputs.action == 'push-python' }}
+      shell: bash
+      run: push-python.sh
+      env:
+        SOURCE_PATH: ${{ inputs.source-path }}
+        TARGET_REPO: ${{ inputs.target-repo }}
+        BUILD_NAME: ${{ inputs.build-name }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        MODULE_NAME: ${{ inputs.module-name }}
+        PROPERTIES: ${{ inputs.properties }}
+        PUBLISH_BUILD_INFO: ${{ inputs.publish-build-info }}
+        ADD_GIT_INFO: ${{ inputs.add-git-info }}
+        GIT_REPO_PATH: ${{ inputs.git-repo-path }}
+        SERVER_ID: ${{ inputs.server-id }}
+        DEBUG: ${{ inputs.debug }}
+        DRY_RUN: ${{ inputs.dry-run }}
+
+    - name: Push npm packages
+      if: ${{ inputs.action == 'push-npm' }}
+      shell: bash
+      run: push-npm.sh
+      env:
+        SOURCE_PATH: ${{ inputs.source-path }}
+        TARGET_REPO: ${{ inputs.target-repo }}
+        BUILD_NAME: ${{ inputs.build-name }}
+        BUILD_NUMBER: ${{ inputs.build-number }}
+        MODULE_NAME: ${{ inputs.module-name }}
+        PROPERTIES: ${{ inputs.properties }}
+        PUBLISH_BUILD_INFO: ${{ inputs.publish-build-info }}
+        ADD_GIT_INFO: ${{ inputs.add-git-info }}
+        GIT_REPO_PATH: ${{ inputs.git-repo-path }}
+        SERVER_ID: ${{ inputs.server-id }}
+        DEBUG: ${{ inputs.debug }}
+        DRY_RUN: ${{ inputs.dry-run }}

@@ -1,0 +1,82 @@
+name: "Semantic PR Title"
+description: "Validates that pull request titles follow the Conventional Commits specification"
+
+inputs:
+  types:
+    description: "Allowed commit types (comma-separated, e.g., 'feat,fix,docs'). Default: standard conventional types"
+    required: false
+    default: "feat,fix,docs,style,refactor,perf,test,build,ci,chore,revert"
+  scopes:
+    description: "Allowed scopes (comma-separated). Leave empty to allow any scope."
+    required: false
+    default: ""
+  require-scope:
+    description: "Whether scope is required in PR title"
+    required: false
+    default: "false"
+  subject-pattern:
+    description: "Regex pattern for subject validation (e.g., '^[A-Z]' to require capitalization)"
+    required: false
+    default: "^.+$"
+  allow-breaking:
+    description: "Whether to allow breaking changes (! or BREAKING CHANGE)"
+    required: false
+    default: "true"
+  ignore-labels:
+    description: "Skip validation if PR has any of these labels (comma-separated)"
+    required: false
+    default: ""
+  wip:
+    description: "Allow WIP prefix ([WIP], WIP:, etc.)"
+    required: false
+    default: "false"
+  github-token:
+    description: "GitHub token for API access"
+    required: false
+    default: ${{ github.token }}
+
+outputs:
+  valid:
+    description: "Whether the PR title is valid (true/false)"
+    value: ${{ steps.validate.outputs.valid }}
+  type:
+    description: "Extracted commit type"
+    value: ${{ steps.validate.outputs.type }}
+  scope:
+    description: "Extracted scope (if present)"
+    value: ${{ steps.validate.outputs.scope }}
+  subject:
+    description: "Extracted subject"
+    value: ${{ steps.validate.outputs.subject }}
+  breaking:
+    description: "Whether this is a breaking change (true/false)"
+    value: ${{ steps.validate.outputs.breaking }}
+  error-message:
+    description: "Error message if validation failed"
+    value: ${{ steps.validate.outputs.error_message }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set GitHub Path
+      shell: bash
+      run: echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
+      env:
+        GITHUB_ACTION_PATH: ${{ github.action_path }}
+
+    - name: Validate PR title
+      id: validate
+      shell: bash
+      run: validate.sh
+      env:
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+        TYPES: ${{ inputs.types }}
+        SCOPES: ${{ inputs.scopes }}
+        REQUIRE_SCOPE: ${{ inputs.require-scope }}
+        SUBJECT_PATTERN: ${{ inputs.subject-pattern }}
+        ALLOW_BREAKING: ${{ inputs.allow-breaking }}
+        IGNORE_LABELS: ${{ inputs.ignore-labels }}
+        WIP: ${{ inputs.wip }}
