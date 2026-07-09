@@ -1,4 +1,4 @@
-# Upload Release Asset
+# Upload GitHub Release Asset
 
 Uploads files to a GitHub release as assets.
 
