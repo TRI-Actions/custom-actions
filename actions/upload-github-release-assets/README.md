@@ -1,4 +1,4 @@
-# Upload GitHub Release Asset
+# Upload GitHub Release Assets
 
 Uploads files to a GitHub release as assets.
 
@@ -16,7 +16,7 @@ Uploads files to a GitHub release as assets.
 
 ```yaml
 - name: Upload release assets
-  uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+  uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
   with:
     tag: v1.0.0
     files: dist/*.tgz
@@ -26,7 +26,7 @@ Uploads files to a GitHub release as assets.
 
 ```yaml
 - name: Upload release assets
-  uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+  uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
   with:
     tag: ${{ github.ref_name }}
     files: |
@@ -68,7 +68,7 @@ jobs:
             --notes "Release notes here"
 
       - name: Upload assets
-        uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+        uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
         with:
           tag: ${{ github.ref_name }}
           files: '*.tgz dist/*.whl docs-site.zip'
@@ -79,7 +79,7 @@ jobs:
 ```yaml
 - name: Upload release assets
   id: upload
-  uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+  uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
   with:
     tag: v1.0.0
     files: dist/*
@@ -155,7 +155,7 @@ permissions:
     python -m build
 
 - name: Upload to release
-  uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+  uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
   with:
     tag: ${{ github.ref_name }}
     files: '*.tgz dist/*.whl dist/*.tar.gz'
@@ -171,7 +171,7 @@ permissions:
   run: tar -czf docs-site.tgz -C docs-site/build .
 
 - name: Upload to release
-  uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+  uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
   with:
     tag: ${{ github.ref_name }}
     files: docs-site.tgz
@@ -184,7 +184,7 @@ permissions:
   run: make build
 
 - name: Upload to release
-  uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+  uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
   with:
     tag: ${{ github.ref_name }}
     files: 'build/app-* build/*.exe'
@@ -195,7 +195,7 @@ permissions:
 ```yaml
 - name: Upload assets
   if: startsWith(github.ref, 'refs/tags/')
-  uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+  uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
   with:
     tag: ${{ github.ref_name }}
     files: dist/*
@@ -305,7 +305,7 @@ jobs:
             --generate-notes
 
       - name: Upload Release Assets
-        uses: TRI-Actions/custom-actions/actions/upload-github-release-asset@main
+        uses: TRI-Actions/custom-actions/actions/upload-github-release-assets@main
         with:
           tag: ${{ github.ref_name }}
           files: |
@@ -317,5 +317,5 @@ jobs:
 
 ## Related Actions
 
-- [`actions/upload-github-release-asset`](https://github.com/actions/upload-github-release-asset) - Official but deprecated
+- [`actions/upload-github-release-assets`](https://github.com/actions/upload-github-release-assets) - Official but deprecated
 - [`softprops/action-gh-release`](https://github.com/softprops/action-gh-release) - Popular alternative

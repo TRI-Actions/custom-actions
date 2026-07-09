@@ -1,4 +1,4 @@
-name: "Upload GitHub Release Asset"
+name: "Upload GitHub Release Assets"
 description: "Uploads files to a GitHub release"
 
 inputs:
