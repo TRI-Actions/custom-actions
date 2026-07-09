@@ -20,6 +20,14 @@ inputs:
     description: "Repository in format owner/repo (defaults to current repository)"
     required: false
     default: ${{ github.repository }}
+  dry-run:
+    description: "Print commands without executing them"
+    required: false
+    default: "false"
+  debug:
+    description: "Enable debug output"
+    required: false
+    default: "false"
 
 outputs:
   uploaded-files:
@@ -45,3 +53,5 @@ runs:
         FILES: ${{ inputs.files }}
         CLOBBER: ${{ inputs.clobber }}
         REPO: ${{ inputs.repo }}
+        DRY_RUN: ${{ inputs.dry-run }}
+        DEBUG: ${{ inputs.debug }}
