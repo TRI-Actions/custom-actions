@@ -4,11 +4,11 @@ Uploads files to a GitHub release as assets.
 
 ## Features
 
-✅ **Upload multiple files** with glob patterns  
-✅ **Automatic file discovery** with wildcards  
-✅ **Overwrite existing assets** (optional)  
-✅ **Error handling** for missing files or releases  
-✅ **Uses GitHub CLI** for reliable uploads  
+✅ **Upload multiple files** with glob patterns
+✅ **Automatic file discovery** with wildcards
+✅ **Overwrite existing assets** (optional)
+✅ **Error handling** for missing files or releases
+✅ **Uses GitHub CLI** for reliable uploads
 
 ## Usage
 
