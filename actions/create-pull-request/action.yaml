@@ -61,6 +61,14 @@ inputs:
     description: "Add Signed-off-by line"
     required: false
     default: "false"
+  update-strategy:
+    description: >
+      How to update an existing remote branch: "replace" resets the branch to
+      the new commit and force-pushes (recommended for regenerated branches like
+      dependency upgrades); "append" cherry-picks the new commit onto the
+      existing branch (may conflict if the branch has diverged).
+    required: false
+    default: "replace"
 
 outputs:
   pull-request-number:
@@ -105,4 +113,5 @@ runs:
         AUTHOR: ${{ inputs.author }}
         COMMITTER: ${{ inputs.committer }}
         SIGNOFF: ${{ inputs.signoff }}
+        UPDATE_STRATEGY: ${{ inputs.update-strategy }}
         REPO: ${{ github.repository }}

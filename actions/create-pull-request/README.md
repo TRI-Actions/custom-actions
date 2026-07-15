@@ -107,6 +107,7 @@ Automatically creates or updates a pull request for changes made during a workfl
 | `author` | Commit author (name <email>) | No | `${{ github.actor }}` |
 | `committer` | Commit committer (name <email>) | No | `github-actions[bot]` |
 | `signoff` | Add Signed-off-by line | No | `false` |
+| `update-strategy` | How to update an existing remote branch: `replace` (reset branch to new commit and force-push) or `append` (cherry-pick new commit onto existing branch) | No | `replace` |
 
 ## Outputs
 
@@ -246,6 +247,27 @@ branch: "update-${{ github.run_id }}"
 
 Pros: Creates separate PR for each run
 Cons: Can create many PRs
+
+### Update Strategy for Existing Branches
+
+When the target `branch` already exists on the remote, `update-strategy` controls
+how it is updated:
+
+- **`replace`** (default): The branch is reset to the newly created commit and
+  force-pushed, overwriting the previous remote branch. Use this for branches
+  that are regenerated on every run (e.g. dependency upgrades) — stacking commits
+  there causes cherry-pick conflicts.
+- **`append`**: The new commit is cherry-picked onto the existing remote branch,
+  preserving prior commits. This can fail with a merge conflict if the branch has
+  diverged from the base.
+
+```yaml
+- uses: TRI-Actions/custom-actions/actions/create-pull-request@main
+  with:
+    title: "chore(deps): upgrade dependencies"
+    branch: "github-actions/upgrade-main"
+    update-strategy: "replace"
+```
 
 ### Date-based Branches
 

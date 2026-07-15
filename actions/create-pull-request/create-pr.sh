@@ -68,22 +68,41 @@ if git ls-remote --heads origin "$BRANCH_NAME" | grep -q "$BRANCH_NAME"; then
   echo "Branch '$BRANCH_NAME' exists on remote"
 fi
 
-# If we're not already on the target branch, create/checkout
-if [ "$CURRENT_BRANCH" != "$BRANCH_NAME" ]; then
-  if $REMOTE_EXISTS; then
-    echo "Checking out existing remote branch '$BRANCH_NAME'"
-    git fetch origin "$BRANCH_NAME"
-    git checkout -B "$BRANCH_NAME" "origin/$BRANCH_NAME"
-    git cherry-pick "$HEAD_SHA"
-  else
-    echo "Creating new branch '$BRANCH_NAME'"
-    git checkout -b "$BRANCH_NAME"
-  fi
+# Default update strategy if not provided.
+UPDATE_STRATEGY="${UPDATE_STRATEGY:-replace}"
+
+# Fetch the remote branch (if any) so we have an up-to-date tracking ref for
+# both strategies (cherry-pick base / --force-with-lease comparison).
+if $REMOTE_EXISTS; then
+  git fetch origin "$BRANCH_NAME"
 fi
 
-# Push branch
-echo "Pushing branch '$BRANCH_NAME' to origin..."
-git push origin "$BRANCH_NAME" --force-with-lease
+if $REMOTE_EXISTS && [ "$UPDATE_STRATEGY" = "append" ]; then
+  # "append": preserve the existing remote branch and stack the new commit on
+  # top. Can conflict if the branch has diverged from our base.
+  echo "Appending commit to existing remote branch '$BRANCH_NAME'"
+  git checkout -B "$BRANCH_NAME" "origin/$BRANCH_NAME"
+  git cherry-pick "$HEAD_SHA"
+  echo "Pushing branch '$BRANCH_NAME' to origin..."
+  git push origin "$BRANCH_NAME" --force-with-lease="$BRANCH_NAME:origin/$BRANCH_NAME"
+else
+  # "replace" (default): point the branch at our freshly created commit and
+  # overwrite any existing remote branch. Best for branches regenerated each
+  # run (e.g. dependency upgrades), where stacking commits causes conflicts.
+  if [ "$UPDATE_STRATEGY" != "replace" ]; then
+    echo "Unknown update-strategy '$UPDATE_STRATEGY', defaulting to 'replace'"
+  fi
+  if [ "$CURRENT_BRANCH" != "$BRANCH_NAME" ]; then
+    echo "Creating branch '$BRANCH_NAME' at new commit $HEAD_SHA"
+    git checkout -B "$BRANCH_NAME"
+  fi
+  echo "Pushing branch '$BRANCH_NAME' to origin..."
+  if $REMOTE_EXISTS; then
+    git push origin "$BRANCH_NAME" --force-with-lease="$BRANCH_NAME:origin/$BRANCH_NAME"
+  else
+    git push origin "$BRANCH_NAME"
+  fi
+fi
 
 # Check if PR already exists
 echo "Checking for existing PR..."
