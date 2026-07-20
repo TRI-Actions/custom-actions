@@ -69,6 +69,17 @@ inputs:
       existing branch (may conflict if the branch has diverged).
     required: false
     default: "replace"
+  patch:
+    description: >
+      Path to a git patch file to apply. When set, the action first checks out
+      the base branch using "token", then applies this patch, then
+      commits/pushes/opens the PR. This makes the action self-contained: the
+      checkout uses the provided token, so pushes are authorized even for files
+      under .github/workflows/ (which the default GITHUB_TOKEN cannot push).
+      Leave empty to operate on the already-checked-out working tree (default
+      behavior).
+    required: false
+    default: ""
 
 outputs:
   pull-request-number:
@@ -92,6 +103,30 @@ runs:
       run: echo "$GITHUB_ACTION_PATH" >> $GITHUB_PATH
       env:
         GITHUB_ACTION_PATH: ${{ github.action_path }}
+
+    # When a patch is provided, own the whole flow: check out the base branch
+    # with the provided token (so the push it configures is authorized), then
+    # apply the patch. Skipped entirely when no patch is given, leaving the
+    # already-checked-out working tree untouched.
+    - name: Checkout base branch
+      if: inputs.patch != ''
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.base }}
+        token: ${{ inputs.token }}
+
+    - name: Apply patch
+      if: inputs.patch != ''
+      shell: bash
+      run: |
+        if [ -s "$PATCH_FILE" ]; then
+          echo "Applying patch: $PATCH_FILE"
+          git apply "$PATCH_FILE"
+        else
+          echo "Patch file '$PATCH_FILE' is empty or missing; nothing to apply."
+        fi
+      env:
+        PATCH_FILE: ${{ inputs.patch }}
 
     - name: Create Pull Request
       id: create-pr

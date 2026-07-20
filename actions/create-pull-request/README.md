@@ -50,6 +50,40 @@ Automatically creates or updates a pull request for changes made during a workfl
     draft: true
 ```
 
+### Self-Contained Patch Mode
+
+When your changes touch files under `.github/workflows/`, the push must use a
+token with the **workflow** scope — and that token must be the one the checkout
+persisted. Pass a `patch` and let the action own the checkout, so you don't have
+to configure the token on a separate checkout step:
+
+```yaml
+# A prior job produced repo.patch and stored it outside the workspace.
+- uses: actions/create-github-app-token@v1
+  id: app-token
+  with:
+    app-id: ${{ vars.MY_APP_ID }}
+    private-key: ${{ secrets.MY_APP_PRIVATE_KEY }}
+
+- uses: actions/download-artifact@v4
+  with:
+    name: repo.patch
+    path: ${{ runner.temp }}          # OUTSIDE the workspace — checkout would wipe it otherwise
+
+- uses: TRI-Actions/custom-actions/actions/create-pull-request@main
+  with:
+    token: ${{ steps.app-token.outputs.token }}
+    patch: ${{ runner.temp }}/repo.patch
+    branch: "github-actions/upgrade-main"
+    title: "chore(deps): upgrade dependencies"
+```
+
+The action checks out `base` using `token`, applies the patch, then commits and
+pushes with those same credentials — so no `token:` is needed on any outer
+checkout step. **Important:** store the patch file outside `$GITHUB_WORKSPACE`
+(e.g. `${{ runner.temp }}`); `actions/checkout` cleans the workspace and would
+delete a patch stored inside it before it can be applied.
+
 ### Complete Example with Outputs
 
 ```yaml
@@ -108,6 +142,7 @@ Automatically creates or updates a pull request for changes made during a workfl
 | `committer` | Commit committer (name <email>) | No | `github-actions[bot]` |
 | `signoff` | Add Signed-off-by line | No | `false` |
 | `update-strategy` | How to update an existing remote branch: `replace` (reset branch to new commit and force-push) or `append` (cherry-pick new commit onto existing branch) | No | `replace` |
+| `patch` | Path to a git patch file. When set, the action checks out `base` with `token`, applies the patch, then commits/pushes/opens the PR (self-contained mode). Store the patch **outside** the workspace (e.g. `${{ runner.temp }}`). | No | `""` |
 
 ## Outputs
 
@@ -317,21 +352,29 @@ with the **workflow** scope:
 - A **GitHub App token** with `Workflows: write` (e.g. via `actions/create-github-app-token`), or
 - A **classic PAT** with the `repo` + `workflow` scopes.
 
-Pass it via the `token` input:
+This action pushes using the credentials that `actions/checkout` persisted, so
+set the token on **both** the checkout step and this action's `token` input:
 
 ```yaml
+- uses: actions/create-github-app-token@v1
+  id: app-token
+  with:
+    app-id: ${{ vars.MY_APP_ID }}
+    private-key: ${{ secrets.MY_APP_PRIVATE_KEY }}
+
+- uses: actions/checkout@v4
+  with:
+    token: ${{ steps.app-token.outputs.token }}   # ← required for the push
+
 - uses: TRI-Actions/custom-actions/actions/create-pull-request@main
   with:
-    token: ${{ steps.app-token.outputs.token }}
+    token: ${{ steps.app-token.outputs.token }}   # ← used by gh for PR API calls
     title: "chore(deps): upgrade dependencies"
 ```
 
-This action pushes using the `token` you pass (attached as a one-off
-`http.extraheader` Authorization header on the push), **not** the credentials
-`actions/checkout` persisted. So you do *not* need to also set `token:` on the
-checkout step — passing it to this action is sufficient. The token is never
-written into the remote URL or persisted to `.git/config`, and this works on both
-github.com and GitHub Enterprise.
+The `token` input is used by the `gh` CLI for PR operations; the **`git push`**
+uses the token `checkout` persisted. Setting it in both places ensures both the
+push and the PR creation are authorized.
 
 ### Commit Attribution Wrong
 
