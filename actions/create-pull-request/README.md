@@ -309,6 +309,30 @@ permissions:
   pull-requests: write
 ```
 
+### Pushing Workflow Files / "refusing to allow a GitHub App ... without workflows permission"
+
+If your changes touch files under `.github/workflows/`, the push must use a token
+with the **workflow** scope:
+
+- A **GitHub App token** with `Workflows: write` (e.g. via `actions/create-github-app-token`), or
+- A **classic PAT** with the `repo` + `workflow` scopes.
+
+Pass it via the `token` input:
+
+```yaml
+- uses: TRI-Actions/custom-actions/actions/create-pull-request@main
+  with:
+    token: ${{ steps.app-token.outputs.token }}
+    title: "chore(deps): upgrade dependencies"
+```
+
+This action pushes using the `token` you pass (attached as a one-off
+`http.extraheader` Authorization header on the push), **not** the credentials
+`actions/checkout` persisted. So you do *not* need to also set `token:` on the
+checkout step — passing it to this action is sufficient. The token is never
+written into the remote URL or persisted to `.git/config`, and this works on both
+github.com and GitHub Enterprise.
+
 ### Commit Attribution Wrong
 
 Customize with `author` and `committer`:

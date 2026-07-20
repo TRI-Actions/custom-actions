@@ -71,6 +71,21 @@ fi
 # Default update strategy if not provided.
 UPDATE_STRATEGY="${UPDATE_STRATEGY:-replace}"
 
+# Push using the token passed to this action rather than whatever credentials
+# actions/checkout persisted on the "origin" remote. This is required when the
+# checkout step used a different token (e.g. the default GITHUB_TOKEN, which a
+# GitHub App is forbidden from using to push changes under .github/workflows/).
+#
+# We attach the token as a one-off Authorization header scoped to this command
+# (via `git -c http.extraheader=...`) and still push to "origin". This keeps the
+# correct destination/host (works on github.com and GitHub Enterprise alike) and
+# avoids writing the token into the remote URL or persisting it to .git/config.
+PUSH_AUTH=()
+if [ -n "${GITHUB_TOKEN:-}" ]; then
+  AUTH_HEADER="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+  PUSH_AUTH=(-c "http.extraheader=$AUTH_HEADER")
+fi
+
 # Fetch the remote branch (if any) so we have an up-to-date tracking ref for
 # both strategies (cherry-pick base / --force-with-lease comparison).
 if $REMOTE_EXISTS; then
@@ -84,7 +99,7 @@ if $REMOTE_EXISTS && [ "$UPDATE_STRATEGY" = "append" ]; then
   git checkout -B "$BRANCH_NAME" "origin/$BRANCH_NAME"
   git cherry-pick "$HEAD_SHA"
   echo "Pushing branch '$BRANCH_NAME' to origin..."
-  git push origin "$BRANCH_NAME" --force-with-lease="$BRANCH_NAME:origin/$BRANCH_NAME"
+  git "${PUSH_AUTH[@]}" push origin "$BRANCH_NAME" --force-with-lease="$BRANCH_NAME:origin/$BRANCH_NAME"
 else
   # "replace" (default): point the branch at our freshly created commit and
   # overwrite any existing remote branch. Best for branches regenerated each
@@ -98,9 +113,9 @@ else
   fi
   echo "Pushing branch '$BRANCH_NAME' to origin..."
   if $REMOTE_EXISTS; then
-    git push origin "$BRANCH_NAME" --force-with-lease="$BRANCH_NAME:origin/$BRANCH_NAME"
+    git "${PUSH_AUTH[@]}" push origin "$BRANCH_NAME" --force-with-lease="$BRANCH_NAME:origin/$BRANCH_NAME"
   else
-    git push origin "$BRANCH_NAME"
+    git "${PUSH_AUTH[@]}" push origin "$BRANCH_NAME"
   fi
 fi
 
