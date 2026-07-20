@@ -13,6 +13,13 @@ Automatically creates or updates a pull request for changes made during a workfl
 
 ## Usage
 
+> **Note on `checkout` (default `true`):** the action checks out the base branch
+> itself so its push is authorized by the token you pass. This **resets the
+> working tree**. If your changes are produced by *prior* steps in the same job
+> (the working-tree pattern shown in most examples below), set `checkout: false`
+> so those changes are preserved. If you supply changes via `patch` instead,
+> leave `checkout` at its default.
+
 ### Basic Example
 
 ```yaml
@@ -26,6 +33,7 @@ Automatically creates or updates a pull request for changes made during a workfl
     title: "chore: Update timestamp"
     body: "Automated update from workflow"
     branch: "auto-update-timestamp"
+    checkout: false   # changes are already in the working tree
 ```
 
 ### With Labels and Reviewers
@@ -48,14 +56,15 @@ Automatically creates or updates a pull request for changes made during a workfl
     labels: "documentation,automated"
     reviewers: "user1,user2"
     draft: true
+    checkout: false   # changes are already in the working tree
 ```
 
 ### Self-Contained Patch Mode
 
 When your changes touch files under `.github/workflows/`, the push must use a
 token with the **workflow** scope — and that token must be the one the checkout
-persisted. Pass a `patch` and let the action own the checkout, so you don't have
-to configure the token on a separate checkout step:
+persisted. Pass a `patch` and let the action own the checkout (the default), so
+you don't have to configure the token on a separate checkout step:
 
 ```yaml
 # A prior job produced repo.patch and stored it outside the workspace.
@@ -76,6 +85,7 @@ to configure the token on a separate checkout step:
     patch: ${{ runner.temp }}/repo.patch
     branch: "github-actions/upgrade-main"
     title: "chore(deps): upgrade dependencies"
+    # checkout defaults to true — the action checks out base with the token
 ```
 
 The action checks out `base` using `token`, applies the patch, then commits and
@@ -100,6 +110,7 @@ delete a patch stored inside it before it can be applied.
     commit-message: "Update npm dependencies"
     labels: "dependencies"
     signoff: true
+    checkout: false   # changes are already in the working tree
 
 - name: Comment on PR
   if: steps.pr.outputs.pull-request-operation == 'created'
@@ -120,6 +131,7 @@ delete a patch stored inside it before it can be applied.
     title: "style: Format code"
     add-paths: "src/ tests/"  # Only commit src and tests directories
     branch: "auto-format"
+    checkout: false   # changes are already in the working tree
 ```
 
 ## Inputs
@@ -142,7 +154,8 @@ delete a patch stored inside it before it can be applied.
 | `committer` | Commit committer (name <email>) | No | `github-actions[bot]` |
 | `signoff` | Add Signed-off-by line | No | `false` |
 | `update-strategy` | How to update an existing remote branch: `replace` (reset branch to new commit and force-push) or `append` (cherry-pick new commit onto existing branch) | No | `replace` |
-| `patch` | Path to a git patch file. When set, the action checks out `base` with `token`, applies the patch, then commits/pushes/opens the PR (self-contained mode). Store the patch **outside** the workspace (e.g. `${{ runner.temp }}`). | No | `""` |
+| `checkout` | Check out `base` with `token` before committing (so the push is authorized by that token). **Resets the working tree** — set `false` if prior steps left changes in the tree you want committed. | No | `true` |
+| `patch` | Path to a git patch file to apply after checkout, supplying the changes to commit. Store the patch **outside** the workspace (e.g. under `RUNNER_TEMP`); checkout cleans the workspace. | No | `""` |
 
 ## Outputs
 
@@ -196,6 +209,7 @@ jobs:
           title: "chore(deps): Weekly dependency update"
           branch: "deps/weekly-update"
           labels: "dependencies"
+          checkout: false   # changes are already in the working tree
 ```
 
 ### 2. Code Generation
@@ -210,6 +224,7 @@ jobs:
     body: "Generated from latest OpenAPI spec"
     add-paths: "src/generated/"
     branch: "codegen/api-client"
+    checkout: false   # changes are already in the working tree
 ```
 
 ### 3. Auto-formatting
@@ -224,6 +239,7 @@ jobs:
     branch: "auto-format"
     labels: "formatting,automated"
     draft: true
+    checkout: false   # changes are already in the working tree
 ```
 
 ### 4. Documentation Updates
@@ -238,6 +254,7 @@ jobs:
     add-paths: "docs/"
     branch: "docs/auto-update"
     reviewers: "docs-team"
+    checkout: false   # changes are already in the working tree
 ```
 
 ## Permissions

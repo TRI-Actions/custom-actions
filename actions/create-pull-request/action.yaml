@@ -69,15 +69,23 @@ inputs:
       existing branch (may conflict if the branch has diverged).
     required: false
     default: "replace"
+  checkout:
+    description: >
+      Whether the action checks out the base branch (using "token") before
+      committing. Default "true": the action owns the checkout, so its push is
+      authorized by the provided token even for files under .github/workflows/
+      (which the default GITHUB_TOKEN cannot push). NOTE: a checkout resets the
+      working tree, discarding uncommitted changes — set this to "false" if your
+      prior steps left changes in the working tree that you want committed.
+    required: false
+    default: "true"
   patch:
     description: >
-      Path to a git patch file to apply. When set, the action first checks out
-      the base branch using "token", then applies this patch, then
-      commits/pushes/opens the PR. This makes the action self-contained: the
-      checkout uses the provided token, so pushes are authorized even for files
-      under .github/workflows/ (which the default GITHUB_TOKEN cannot push).
-      Leave empty to operate on the already-checked-out working tree (default
-      behavior).
+      Path to a git patch file to apply after checkout. Use this to supply the
+      changes to commit when "checkout" is enabled (a checkout would otherwise
+      discard working-tree changes). Store the patch OUTSIDE the workspace (e.g.
+      under RUNNER_TEMP); actions/checkout cleans the workspace. Leave empty to
+      commit whatever is already staged/present in the working tree.
     required: false
     default: ""
 
@@ -104,17 +112,20 @@ runs:
       env:
         GITHUB_ACTION_PATH: ${{ github.action_path }}
 
-    # When a patch is provided, own the whole flow: check out the base branch
-    # with the provided token (so the push it configures is authorized), then
-    # apply the patch. Skipped entirely when no patch is given, leaving the
-    # already-checked-out working tree untouched.
+    # Check out the base branch with the provided token so the subsequent push
+    # is authorized by that token (required for pushing files under
+    # .github/workflows/, which the default GITHUB_TOKEN cannot push). This
+    # resets the working tree, so it is skipped when checkout is disabled to
+    # preserve changes made by prior steps.
     - name: Checkout base branch
-      if: inputs.patch != ''
+      if: inputs.checkout == 'true'
       uses: actions/checkout@v4
       with:
         ref: ${{ inputs.base }}
         token: ${{ inputs.token }}
 
+    # Apply a patch (if provided) to supply the changes to commit. Runs after
+    # checkout so the changes survive on the freshly checked-out tree.
     - name: Apply patch
       if: inputs.patch != ''
       shell: bash
