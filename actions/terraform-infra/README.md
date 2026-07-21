@@ -29,8 +29,6 @@ Account_number_A.tf is customized as the following:
 
 ## Inputs
 
-There are three inputs with this repo:
-
 ```
 AWS_IAM_Role:
     description: 'Cross Account role arn to assume to deploy infrastructure'
@@ -44,11 +42,21 @@ AWS_IAM_Role:
     description: "Location of pat token in SSM"
     required: false
     type: String
+  require_approval:
+    description: "If 'false', skip the PR-approval gate before Terraform apply. Defaults to 'true'."
+    required: false
+    default: 'true'
+    type: String
 ```
 
 If no IAM role is set, it will use whatever is set by default.
 SSM_private keys can have multiple key locations separated by a comma.
 SSM_pat can only use one personal access token location.
+`require_approval` is `'true'` by default; set it to `'false'` only for repos that
+have explicitly opted out of the in-workflow approval gate.
+
+Fork pull requests are not supported: the action fails fast and posts a comment
+asking the contributor to push their branch directly to the base repository.
 
 All variables can be omitted or used depending on the context.
 

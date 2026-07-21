@@ -18,10 +18,52 @@ inputs:
     description: "Location of pat token in SSM"
     required: false
     type: String
+  require_approval:
+    description: "If 'false', skip the PR-approval gate before Terraform apply. Defaults to 'true'."
+    required: false
+    default: 'true'
+    type: String
 
 runs:
   using: composite
   steps:
+    - name: Reject fork PRs
+      uses: actions/github-script@v7
+      with:
+        script: |
+          let pr;
+          if (context.eventName === 'pull_request') {
+            pr = context.payload.pull_request;
+          } else if (context.eventName === 'issue_comment' && context.payload.issue.pull_request) {
+            const { data } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number,
+            });
+            pr = data;
+          } else {
+            return;
+          }
+
+          const baseRepo = pr.base.repo.full_name;
+          const headRepo = pr.head.repo && pr.head.repo.full_name;
+          if (headRepo && headRepo !== baseRepo) {
+            const body = [
+              '❌ Fork pull requests are not supported for this repository.',
+              '',
+              `This PR is from \`${headRepo}\`, but the workflow only runs on branches pushed directly to \`${baseRepo}\`.`,
+              '',
+              'Please push your branch to the base repository and reopen the PR.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
+            core.setFailed(`Fork PR from ${headRepo} is not supported.`);
+          }
+
     - name: Check out repository code
       uses: actions/checkout@v4
       with:
@@ -78,44 +120,45 @@ runs:
       uses: actions/github-script@v7
       with:
         script: |
-          let head, base;
-
+          let pr;
           if (context.eventName === 'pull_request') {
-
-            head = context.payload.pull_request.head.ref;
-            base = context.payload.pull_request.base.ref;
+            pr = context.payload.pull_request;
           } else if (context.eventName === 'issue_comment' && context.payload.issue.pull_request) {
-
-            const prNumber = context.payload.issue.number;
-            const { data: pr } = await github.rest.pulls.get({
+            const { data } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: prNumber,
+              pull_number: context.payload.issue.number,
             });
-            head = pr.head.ref;
-            base = pr.base.ref;
+            pr = data;
+          } else {
+            return;
           }
 
-          console.log(`Comparing ${base}...${head}`);
+          const headRef = pr.head.ref;
+          const baseRef = pr.base.ref;
+          const baseSha = pr.base.sha;
+          const headSha = pr.head.sha;
+
+          console.log(`Comparing ${baseRef}(${baseSha})...${headRef}(${headSha})`);
 
           const result = await github.rest.repos.compareCommits({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            base,
-            head,
+            base: baseSha,
+            head: headSha,
           });
 
           if (result.data.status === 'behind' || result.data.status === 'diverged') {
-            const output = `❌ The branch '${head}' is behind 'main' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with main`
+            const output = `❌ The branch '${headRef}' is behind '${baseRef}' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with ${baseRef}`
             github.rest.issues.createComment({
               issue_number: context.issue.number,
               owner: context.repo.owner,
               repo: context.repo.repo,
               body: output
             })
-            core.setFailed(`❌ The branch '${head}' is behind 'main' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with main`);
+            core.setFailed(`❌ The branch '${headRef}' is behind '${baseRef}' by ${result.data.behind_by} commit(s). Please perform git pull to merge branch with ${baseRef}`);
           } else {
-            console.log(`✅ The branch '${head}' is up-to-date with 'main'.`);
+            console.log(`✅ The branch '${headRef}' is up-to-date with '${baseRef}'.`);
           }
 
     ##############################################
@@ -320,7 +363,7 @@ runs:
     ##############################################
 
     - name: Count Approvals
-      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') && inputs.require_approval != 'false' }}
       id: count-approvals
       uses: actions/github-script@v7
       with:
@@ -334,7 +377,7 @@ runs:
           core.setOutput('approvals', approvals);
 
     - name: Fail if No Approvals
-      if: steps.count-approvals.outputs.approvals == 0 && github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy')
+      if: ${{ steps.count-approvals.outputs.approvals == 0 && github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') && inputs.require_approval != 'false' }}
       uses: actions/github-script@v7
       with:
         script: |
