@@ -1,13 +1,15 @@
 # JFrog CLI
 
-This GitHub Action installs the JFrog CLI, configures it with OIDC authentication, and can push Python and npm packages to JFrog Artifactory.
+This GitHub Action installs the JFrog CLI, configures it with OIDC authentication, and can push and resolve Python and npm packages to/from JFrog Artifactory.
 
 ## Features
 
 - **Setup**: Installs JFrog CLI and configures OIDC authentication
 - **Push Python**: Upload Python packages (.whl, .tar.gz) to JFrog Artifactory
 - **Push npm**: Upload npm packages (.tgz) to JFrog Artifactory
-- **Build Info**: Automatically collects and publishes build information
+- **Install Python**: Resolve/install dependencies from a `requirements.txt` through JFrog Artifactory
+- **Install npm**: Resolve/install dependencies from a `package.json` through JFrog Artifactory
+- **Build Info**: Automatically collects and publishes build information (for both uploaded artifacts and resolved dependencies)
 - **Git Integration**: Adds git metadata to builds
 
 ## Prerequisites
@@ -119,6 +121,71 @@ jobs:
           properties: 'git.tag=${{ github.ref_name }}'
 ```
 
+### Install Python Dependencies
+
+Resolve and install dependencies from a `requirements.txt` through JFrog
+Artifactory (e.g. to consume internal or mirrored packages):
+
+```yaml
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies from JFrog
+        uses: ./actions/jfrog-cli
+        with:
+          action: install-python
+          oidc-provider: 'ie-tf-modules'
+          source-path: '.'                    # directory containing requirements.txt
+          resolve-repo: 'my-pypi-virtual'
+          # requirements-file: 'requirements.txt'   # default
+```
+
+### Install npm Dependencies
+
+Resolve and install dependencies from a `package.json` through JFrog
+Artifactory:
+
+```yaml
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 'lts/*'
+
+      - name: Install dependencies from JFrog
+        uses: ./actions/jfrog-cli
+        with:
+          action: install-npm
+          oidc-provider: 'ie-tf-modules'
+          source-path: '.'                    # directory containing package.json
+          resolve-repo: 'my-npm-virtual'
+```
+
+> **Note:** the install actions resolve/install packages through Artifactory
+> only — they do not collect or publish build info. Use the push actions when
+> you need build-info/provenance tracking.
+
 ### Complete Release Workflow
 
 Based on your current release workflow:
@@ -211,7 +278,7 @@ jobs:
 
 | Input | Description | Required | Default |
 |-------|-------------|----------|---------|
-| `action` | Action to perform: `setup`, `push-python`, or `push-npm` | **Yes** | - |
+| `action` | Action to perform: `setup`, `push-python`, `push-npm`, `install-python`, or `install-npm` | **Yes** | - |
 | `jfrog-url` | JFrog platform base URL | No | `https://toyotaresearchinstitute.jfrog.io` |
 | `oidc-provider` | Name of the OIDC provider configured in JFrog | **Yes** | - |
 | `audience` | OIDC audience to request from GitHub | No | `jfrog-github-oidc` |
@@ -232,6 +299,16 @@ Required when `action` is `push-python` or `push-npm`:
 | `properties` | Additional properties to attach (e.g., `key1=value1;key2=value2`) | No | - |
 | `publish-build-info` | Whether to publish build info after upload | No | `true` |
 | `add-git-info` | Whether to add git info to build | No | `true` |
+
+### Install Action Inputs
+
+Used when `action` is `install-python` or `install-npm`:
+
+| Input | Description | Required | Default |
+|-------|-------------|----------|---------|
+| `resolve-repo` | JFrog repository to resolve/install dependencies from (typically a virtual repo) | **Yes** | - |
+| `source-path` | Directory containing the dependency manifest (`requirements.txt` / `package.json`) | No | `.` |
+| `requirements-file` | Requirements file for `install-python` (relative to `source-path`) | No | `requirements.txt` |
 
 ## Outputs
 
@@ -260,6 +337,20 @@ Uploads npm packages to JFrog Artifactory:
 - Uploads all `.tgz` files from source path
 - Attaches build information and git metadata
 - Publishes build info to JFrog
+
+### `install-python`
+
+Resolves and installs Python dependencies through JFrog Artifactory:
+- Configures pip to resolve from `resolve-repo` (`jf pip-config --repo-resolve`)
+- Installs from the requirements file (`jf pip install -r <file>`)
+- Does not collect or publish build info
+
+### `install-npm`
+
+Resolves and installs npm dependencies through JFrog Artifactory:
+- Configures npm to resolve from `resolve-repo` (`jf npm-config --repo-resolve`)
+- Installs from `package.json` (`jf npm install`)
+- Does not collect or publish build info
 
 ## Build Information
 

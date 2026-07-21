@@ -3,7 +3,7 @@ description: "Installs JFrog CLI, configures OIDC authentication, and performs p
 
 inputs:
   action:
-    description: "Action to perform: 'setup', 'push-python', or 'push-npm'"
+    description: "Action to perform: 'setup', 'push-python', 'push-npm', 'install-python', or 'install-npm'"
     required: true
   jfrog-url:
     description: "JFrog platform base URL"
@@ -25,10 +25,17 @@ inputs:
     default: "default"
     required: false
   source-path:
-    description: "Source path for artifacts (required for push actions). For push-python: path to directory with .whl/.tar.gz files (e.g., dist/python). For push-npm: path to directory with package.json (e.g., .)"
+    description: "Source path (required for push actions; optional for install actions, defaults to '.'). For push-python: directory with .whl/.tar.gz files (e.g., dist/python). For push-npm: directory with package.json. For install-python: directory containing the requirements file. For install-npm: directory with package.json."
     required: false
   target-repo:
-    description: "Target JFrog repository (required for push actions)"
+    description: "Target JFrog repository to deploy to (required for push actions)"
+    required: false
+  resolve-repo:
+    description: "JFrog repository to resolve/install dependencies from (required for install actions). Typically a virtual repo aggregating your remote/local repos."
+    required: false
+  requirements-file:
+    description: "Requirements file to install from for install-python (relative to source-path)"
+    default: "requirements.txt"
     required: false
   build-name:
     description: "Build name for JFrog build info (required for push actions)"
@@ -129,6 +136,29 @@ runs:
         PUBLISH_BUILD_INFO: ${{ inputs.publish-build-info }}
         ADD_GIT_INFO: ${{ inputs.add-git-info }}
         GIT_REPO_PATH: ${{ inputs.git-repo-path }}
+        SERVER_ID: ${{ inputs.server-id }}
+        DEBUG: ${{ inputs.debug }}
+        DRY_RUN: ${{ inputs.dry-run }}
+
+    - name: Install Python dependencies
+      if: ${{ inputs.action == 'install-python' }}
+      shell: bash
+      run: install-python.sh
+      env:
+        SOURCE_PATH: ${{ inputs.source-path }}
+        RESOLVE_REPO: ${{ inputs.resolve-repo }}
+        REQUIREMENTS_FILE: ${{ inputs.requirements-file }}
+        SERVER_ID: ${{ inputs.server-id }}
+        DEBUG: ${{ inputs.debug }}
+        DRY_RUN: ${{ inputs.dry-run }}
+
+    - name: Install npm dependencies
+      if: ${{ inputs.action == 'install-npm' }}
+      shell: bash
+      run: install-npm.sh
+      env:
+        SOURCE_PATH: ${{ inputs.source-path }}
+        RESOLVE_REPO: ${{ inputs.resolve-repo }}
         SERVER_ID: ${{ inputs.server-id }}
         DEBUG: ${{ inputs.debug }}
         DRY_RUN: ${{ inputs.dry-run }}
