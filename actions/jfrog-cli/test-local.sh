@@ -10,12 +10,16 @@ DRY_RUN="${2:-true}"
 
 # Create test directories and files
 echo "Setting up test environment..."
-mkdir -p dist/python dist/js .repo
+mkdir -p dist/python dist/js .repo src/python src/js
 
 # Create dummy files
 touch dist/python/test-package-0.0.1-py3-none-any.whl
 touch dist/python/test-package-0.0.1.tar.gz
 touch dist/js/test-package-0.0.1.tgz
+
+# Create dummy dependency manifests for the install actions
+printf 'requests==2.31.0\n' > src/python/requirements.txt
+printf '{"name":"test-package","version":"0.0.1"}\n' > src/js/package.json
 
 # Initialize a dummy git repo if needed
 if [ ! -d .repo/.git ]; then
@@ -51,9 +55,22 @@ elif [ "$ACTION" = "push-npm" ]; then
   export SOURCE_PATH="dist/js"
   export TARGET_REPO="test-npm-local"
   ./push-npm.sh
+elif [ "$ACTION" = "install-python" ]; then
+  echo "=== Testing install-python.sh ==="
+  echo ""
+  export SOURCE_PATH="src/python"
+  export RESOLVE_REPO="test-pypi-virtual"
+  export REQUIREMENTS_FILE="requirements.txt"
+  ./install-python.sh
+elif [ "$ACTION" = "install-npm" ]; then
+  echo "=== Testing install-npm.sh ==="
+  echo ""
+  export SOURCE_PATH="src/js"
+  export RESOLVE_REPO="test-npm-virtual"
+  ./install-npm.sh
 else
   echo "ERROR: Unknown action '$ACTION'"
-  echo "Usage: $0 [push-python|push-npm] [true|false]"
+  echo "Usage: $0 [push-python|push-npm|install-python|install-npm] [true|false]"
   echo "  First argument: action to test (default: push-python)"
   echo "  Second argument: dry-run mode (default: true)"
   exit 1
