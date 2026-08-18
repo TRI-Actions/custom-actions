@@ -675,7 +675,7 @@ runs:
     ##############################################
 
     - name: Create after status check
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && steps.apply.conclusion != 'skipped' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
       uses: actions/github-script@v7
       id: after_status_check
       with:
