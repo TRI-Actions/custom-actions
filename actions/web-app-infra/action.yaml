@@ -320,7 +320,7 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Run scripts in before_scripts
-      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true' && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["true", true]'), env.triggeredByComment))
+      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true'
       id: before_scripts
       uses: TRI-Actions/custom-actions/actions/run-script@main
       with:
