@@ -291,7 +291,7 @@ runs:
 
     - name: Parse manifest file
       id: parse-yaml
-      uses: TRI-Actions/custom-actions/actions/parse-yaml@main
+      uses: TRI-Actions/custom-actions/actions/parse-yaml@TRI-53300
       with:
         file_path: manifest.yaml
         main_key: build_config
