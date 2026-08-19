@@ -237,7 +237,7 @@ runs:
         file_path: manifest.yaml
 
     - name: Run pre-commit checks
-      if: ${{ !contains(github.event.comment.body, 'GithubDeploy') && (github.event_name == 'pull_request' || github.event_name == 'issue_comment') }}
+      if: ${{ !startsWith(github.event.comment.body, 'GithubDeploy') && (github.event_name == 'pull_request' || github.event_name == 'issue_comment') }}
       uses: TRI-Actions/custom-actions/actions/pre-commit-checks@main
 
     - name: Get environment
@@ -327,7 +327,7 @@ runs:
         path: app_build_scripts/before_scripts
       env:
         environment: ${{ steps.get-label.outputs.environment }}
-        triggeredByComment: ${{ contains(github.event.comment.body, 'GithubDeploy') }}
+        triggeredByComment: ${{ startsWith(github.event.comment.body, 'GithubDeploy') }}
 
     - name: Post before script outputs and update status check
       if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true' && always() && (steps.before_scripts.conclusion == 'success' || steps.before_scripts.conclusion == 'failure')
@@ -477,7 +477,7 @@ runs:
       working-directory: terraform
 
     - name: Post plan outputs and update status check
-      if: always() && !contains(github.event.comment.body, 'GithubDeploy')
+      if: always() && !startsWith(github.event.comment.body, 'GithubDeploy')
       uses: actions/github-script@v7
       with:
         script: |
@@ -575,7 +575,7 @@ runs:
     ##############################################
 
     - name: Create apply status check
-      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') }}
       uses: actions/github-script@v7
       id: apply_status_check
       with:
@@ -594,7 +594,7 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Terraform - Apply
-      if: ${{ (github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy')) || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["true", true]'), env.triggeredByComment)) }}
+      if: ${{ (github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy')) || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["true", true]'), env.triggeredByComment)) }}
       id: apply
       shell: bash
       run: |
@@ -628,7 +628,7 @@ runs:
       working-directory: terraform
 
     - name: Post apply outputs and update status check
-      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') && always() }}
+      if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') && always() }}
       uses: actions/github-script@v7
       with:
         script: |
@@ -701,7 +701,7 @@ runs:
         path: app_build_scripts/after_scripts
       env:
         environment: ${{ steps.get-label.outputs.environment }}
-        triggeredByComment: ${{ contains(github.event.comment.body, 'GithubDeploy') }}
+        triggeredByComment: ${{ startsWith(github.event.comment.body, 'GithubDeploy') }}
 
     - name: Post after script outputs and update status check
       if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && always() && (steps.after_scripts.conclusion == 'success' || steps.after_scripts.conclusion == 'failure')
@@ -763,7 +763,7 @@ runs:
           }
     - name: Merge Branch
       uses: actions/github-script@v7
-      if: ${{ job.status == 'success' && github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ job.status == 'success' && github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') }}
       with:
         script: |
             github.rest.pulls.merge({
