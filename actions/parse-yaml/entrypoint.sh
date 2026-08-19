@@ -8,4 +8,5 @@ python /main.py \
 --sub_key "$SUB_KEY" \
 --primary_key "$PRIMARY_KEY" \
 --primary_value "$PRIMARY_VALUE" \
---top_level_keys "$TOP_LEVEL_KEYS"
+--top_level_keys "$TOP_LEVEL_KEYS" \
+--merge_sub_key "$MERGE_SUB_KEY"

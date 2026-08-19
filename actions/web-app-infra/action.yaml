@@ -230,12 +230,6 @@ runs:
           })
           core.setOutput('CHECK_ID', check.data.id)
 
-    - name: Parse manifest file
-      id: parse-yaml
-      uses: TRI-Actions/custom-actions/actions/parse-yaml@main
-      with:
-        file_path: manifest.yaml
-
     - name: Run pre-commit checks
       if: ${{ !startsWith(github.event.comment.body, 'GithubDeploy') && (github.event_name == 'pull_request' || github.event_name == 'issue_comment') }}
       uses: TRI-Actions/custom-actions/actions/pre-commit-checks@main
@@ -294,6 +288,15 @@ runs:
             completed_at: formatDate(),
             conclusion: '${{ steps.get-label.conclusion }}'
           })
+
+    - name: Parse manifest file
+      id: parse-yaml
+      uses: TRI-Actions/custom-actions/actions/parse-yaml@main
+      with:
+        file_path: manifest.yaml
+        main_key: build_config
+        merge_sub_key: ${{ steps.get-label.outputs.environment }}
+
     ##############################################
     #                                            #
     #            Before Scripts                  #

@@ -13,6 +13,9 @@ inputs:
   sub_key:
     description: "Sub key for nested data (Optional)"
     required: false
+  merge_sub_key:
+    description: "Merge the sub-key block over the main-key scalars so per-env overrides win (Optional)"
+    required: false
   format_type:
     description: 'The format of the YAML. Possible values: simple, crud'
     required: false
@@ -37,3 +40,4 @@ runs:
     PRIMARY_KEY: ${{ inputs.primary_key }}
     PRIMARY_VALUE: ${{ inputs.primary_value }}
     TOP_LEVEL_KEYS: ${{ inputs.top_level_keys }}
+    MERGE_SUB_KEY: ${{ inputs.merge_sub_key }}
