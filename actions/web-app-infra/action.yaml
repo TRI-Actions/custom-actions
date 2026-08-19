@@ -294,14 +294,6 @@ runs:
             completed_at: formatDate(),
             conclusion: '${{ steps.get-label.conclusion }}'
           })
-    - name: Parse per-env manifest config
-      id: parse-env-yaml
-      uses: TRI-Actions/custom-actions/actions/parse-yaml@main
-      with:
-        file_path: manifest.yaml
-        main_key: build_config
-        sub_key: ${{ steps.get-label.outputs.environment }}
-
     ##############################################
     #                                            #
     #            Before Scripts                  #
@@ -328,7 +320,7 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Run scripts in before_scripts
-      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true' && (github.event_name != 'workflow_dispatch' || contains(fromJSON('["true", true]'), env.triggeredByComment) || contains(fromJSON('["true", true]'), steps.parse-env-yaml.outputs.bootstrap_mode))
+      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true'
       id: before_scripts
       uses: TRI-Actions/custom-actions/actions/run-script@main
       with:
