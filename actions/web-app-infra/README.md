@@ -64,7 +64,7 @@ The **plan** step runs with `-lock=false`. It reads state without acquiring the 
 - A plan and a running apply can overlap safely — the plan does not interfere with the apply's lock.
 - A stale lock (left by a crashed apply) does **not** cause the plan to fail. If you need to clear a stale lock, do it manually: `terraform force-unlock <LOCK_ID>`.
 
-The **apply** step acquires the lock normally. If it encounters an existing lock it will fail and report the lock details (ID, operation, timestamp) — use those to determine whether the lock is stale before force-unlocking.
+The **apply** step acquires the lock normally via `terraform apply`. If it encounters an existing lock it will fail with Terraform's standard lock error, which includes the lock ID, operation type, and timestamp — use those to determine whether the lock is stale before force-unlocking manually.
 
 ## How to use in Github Actions Workflow:
 
