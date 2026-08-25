@@ -49,6 +49,12 @@ def extract_crud(yaml_data, primary_key=None, primary_value=None, top_level_keys
 
     return output
 
+def extract_merged(yaml_data, main_key, merge_sub_key):
+    base = yaml_data.get(main_key, {}) if main_key else yaml_data
+    scalars = {k: v for k, v in base.items() if not isinstance(v, (dict, list))}
+    return {**scalars, **(base.get(merge_sub_key) or {})}
+
+
 def main_action():
     parser = argparse.ArgumentParser()
     parser.add_argument('--file_path', required=True, help='Path to the yaml file')
@@ -58,12 +64,15 @@ def main_action():
     parser.add_argument('--primary_key', default=None)
     parser.add_argument('--primary_value', default=None)
     parser.add_argument('--top_level_keys', default=None)
+    parser.add_argument('--merge_sub_key', default=None)
     args = parser.parse_args()
 
     with open(args.file_path, 'r') as yaml_file:
         yaml_data = yaml.safe_load(yaml_file)
 
-    if args.format_type == "crud":
+    if args.merge_sub_key:
+        yaml_data = extract_merged(yaml_data, args.main_key, args.merge_sub_key)
+    elif args.format_type == "crud":
         yaml_data = extract_crud(yaml_data, args.primary_key, args.primary_value, args.top_level_keys)
     else:
         yaml_data = extract_simple_nested(yaml_data, args.main_key, args.sub_key)

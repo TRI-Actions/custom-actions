@@ -34,6 +34,16 @@ inputs:
     description: "Location of JFrog Token in SSM"
     required: false
     type: String
+  environment:
+    description: "Target environment name (e.g., dev, staging, prod). When omitted, environment is inferred from PR label (legacy behavior for multi-branch model)."
+    required: false
+    type: String
+    default: ''
+  app_source_path:
+    description: "Relative path to app source code (for in-app-repo layout). When set, skips git clone and uses local checkout. When omitted, clones app repo from git_url@git_ref in manifest.yaml (legacy standalone behavior)."
+    required: false
+    type: String
+    default: ''
 
 runs:
   using: composite
@@ -136,6 +146,7 @@ runs:
     ##############################################
 
     - name: Check if current branch is behind base branch
+      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
       uses: actions/github-script@v7
       with:
         script: |
@@ -187,6 +198,7 @@ runs:
         terraform_version: 1.14.9
 
     - name: Get Head Sha
+      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
       id: sha
       uses: actions/github-script@v7
       with:
@@ -200,6 +212,7 @@ runs:
           core.setOutput('sha', headSha)
 
     - name: Create  config status check
+      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
       uses: actions/github-script@v7
       id: config_status_check
       with:
@@ -217,21 +230,30 @@ runs:
           })
           core.setOutput('CHECK_ID', check.data.id)
 
-    - name: Parse manifest file
-      id: parse-yaml
-      uses: TRI-Actions/custom-actions/actions/parse-yaml@main
-      with:
-        file_path: manifest.yaml
-
     - name: Run pre-commit checks
-      if: ${{ !contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ !startsWith(github.event.comment.body, 'GithubDeploy') && (github.event_name == 'pull_request' || github.event_name == 'issue_comment') }}
       uses: TRI-Actions/custom-actions/actions/pre-commit-checks@main
 
-    - name: Get label
+    - name: Get environment
       id: get-label
       uses: actions/github-script@v7
       with:
         script: |
+          // Check if environment already set by workflow (for single-branch model)
+          const envFromInput = '${{ inputs.environment }}';
+          if (envFromInput && envFromInput.trim() !== '') {
+            console.log(`Using environment from input: ${envFromInput}`);
+            core.setOutput('environment', envFromInput);
+            return;
+          }
+
+          // Fallback to label detection (existing multi-branch model behavior)
+          // Only run this if we're in a PR context (issue_comment or pull_request event)
+          if (!context.issue || !context.issue.number) {
+            core.setFailed('No environment specified and not in a PR context to check labels');
+            return;
+          }
+
           const { data: labels } = await github.rest.issues.listLabelsOnIssue({
             owner: context.repo.owner,
             repo: context.repo.repo,
@@ -251,7 +273,7 @@ runs:
             core.setOutput('environment', labels[0].name);
           }
     - name: Update config status check
-      if: ${{ always() }}
+      if: ${{ always() && (github.event_name == 'pull_request' || github.event_name == 'issue_comment') }}
       uses: actions/github-script@v7
       with:
         script: |
@@ -266,6 +288,15 @@ runs:
             completed_at: formatDate(),
             conclusion: '${{ steps.get-label.conclusion }}'
           })
+
+    - name: Parse manifest file
+      id: parse-yaml
+      uses: TRI-Actions/custom-actions/actions/parse-yaml@main
+      with:
+        file_path: manifest.yaml
+        main_key: build_config
+        merge_sub_key: ${{ steps.get-label.outputs.environment }}
+
     ##############################################
     #                                            #
     #            Before Scripts                  #
@@ -273,7 +304,7 @@ runs:
     ##############################################
 
     - name: Create before status check
-      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true'
+      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
       uses: actions/github-script@v7
       id: before_status_check
       with:
@@ -299,7 +330,7 @@ runs:
         path: app_build_scripts/before_scripts
       env:
         environment: ${{ steps.get-label.outputs.environment }}
-        triggeredByComment: ${{ contains(github.event.comment.body, 'GithubDeploy') }}
+        triggeredByComment: ${{ startsWith(github.event.comment.body, 'GithubDeploy') }}
 
     - name: Post before script outputs and update status check
       if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true' && always() && (steps.before_scripts.conclusion == 'success' || steps.before_scripts.conclusion == 'failure')
@@ -320,34 +351,48 @@ runs:
           }
           const run_url = process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID
           const run_link = '<a href="' + run_url + '">logs</a>.'
-          const std_out = logs.length > 65000 ? "...\n" + logs.substring(logs.length - 65000) : logs
-          const truncated_output = logs.length > 65000 ? "Output is too long and was truncated. You can see the full output in " + run_link + "<br /><br />" : ""
-          github.rest.checks.update({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            check_run_id:  '${{ steps.before_status_check.outputs.CHECK_ID }}',
-            status: 'completed',
-            completed_at: formatDate(),
-            conclusion: '${{ steps.before_scripts.conclusion }}'
-          })
+          const maxLength = 30000
+          const std_out = logs.length > maxLength ? "...\n" + logs.substring(logs.length - maxLength) : logs
+          const truncated_message = logs.length > maxLength ? `Output was truncated to last ${maxLength} characters. [View full logs](${run_url})` : ""
 
-          const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          #### Before Scripts Output 🖌
-          <details><summary>Before Scripts Output</summary>
+          // For workflow_dispatch: post to workflow summary
+          if (context.eventName === 'workflow_dispatch') {
+            await core.summary
+              .addHeading('Before Scripts Output', 3)
+              .addRaw(truncated_message ? `⚠️ ${truncated_message}\n\n` : '')
+              .addRaw(`<details><summary>Show Before Scripts Output (${context.eventName})</summary>\n\n\`\`\`\n${std_out}\n\`\`\`\n\n</details>`)
+              .write()
+            console.log('✅ Before scripts output posted to workflow summary')
+          }
+          // For PR events: update check and post comment
+          else {
+            github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id:  '${{ steps.before_status_check.outputs.CHECK_ID }}',
+              status: 'completed',
+              completed_at: formatDate(),
+              conclusion: '${{ steps.before_scripts.conclusion }}'
+            })
 
-          ~~~
-          ${std_out}
-          ~~~
+            const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            #### Before Scripts Output 🖌
+            <details><summary>Before Scripts Output</summary>
 
-          ${truncated_output}
-          </details>`;
+            ~~~
+            ${std_out}
+            ~~~
 
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          })
+            ${truncated_message}
+            </details>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+          }
 
     ##############################################
     #                                            #
@@ -356,6 +401,7 @@ runs:
     ##############################################
 
     - name: Create plan status check
+      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
       uses: actions/github-script@v7
       id: plan_status_check
       with:
@@ -402,90 +448,101 @@ runs:
       id: plan
       shell: bash
       run: |
-        set +e
-        check_lock() {
-          ERROR_OUTPUT=$(terraform plan -json -var-file globals/globals.tfvars -var-file ${{ steps.get-label.outputs.environment }}/${{ steps.get-label.outputs.environment }}.tfvars 2>&1)
-          if [[ $ERROR_OUTPUT == *"Error acquiring the state lock"* ]]; then
-            LOCK_ID=$(echo $ERROR_OUTPUT | jq -r .diagnostic.detail | grep -A 1 "Lock Info" | awk '/ID:/ {print $2; exit}')
-            echo "State is locked. Lock ID:"
-            echo "$LOCK_ID"
-
-            echo "Attempting to unlock terraform state"
-            if terraform force-unlock --force "${LOCK_ID}"; then
-              echo "Terraform state has been successfully unlocked!"
-              echo "Running plan again.."
-              terraform plan -no-color -var-file globals/globals.tfvars -var-file ${{ steps.get-label.outputs.environment }}/${{ steps.get-label.outputs.environment }}.tfvars -out=${GITHUB_WORKSPACE}/plan.tfplan
-              terraform show -no-color ${GITHUB_WORKSPACE}/plan.tfplan > ${GITHUB_WORKSPACE}/plan.out
-            else
-              echo "Failed to unlock the state."
-              return 1
-            fi
-          elif [[ $ERROR_OUTPUT == *"Error:"* ]]; then
-            echo "Error occurred while checking Terraform state:"
-            echo "$ERROR_OUTPUT"
-            return 1
-          else
-            echo "State is not locked. No action needed."
-            terraform plan -no-color -var-file globals/globals.tfvars -var-file ${{ steps.get-label.outputs.environment }}/${{ steps.get-label.outputs.environment }}.tfvars -out=${GITHUB_WORKSPACE}/plan.tfplan
-            terraform show -no-color ${GITHUB_WORKSPACE}/plan.tfplan > ${GITHUB_WORKSPACE}/plan.out
-          fi
-        }
-        check_lock
+        terraform plan -lock=false -no-color -var-file globals/globals.tfvars -var-file ${{ steps.get-label.outputs.environment }}/${{ steps.get-label.outputs.environment }}.tfvars -out=${GITHUB_WORKSPACE}/plan.tfplan
+        terraform show -no-color ${GITHUB_WORKSPACE}/plan.tfplan > ${GITHUB_WORKSPACE}/plan.out
       working-directory: terraform
 
     - name: Post plan outputs and update status check
-      if: always() && !contains(github.event.comment.body, 'GithubDeploy')
+      if: always() && !startsWith(github.event.comment.body, 'GithubDeploy')
       uses: actions/github-script@v7
       with:
         script: |
+          const fs = require('fs')
           const formatDate = () => {
             return new Date().toISOString()
           }
-          github.rest.checks.update({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            check_run_id:  '${{ steps.plan_status_check.outputs.CHECK_ID }}',
-            status: 'completed',
-            completed_at: formatDate(),
-            conclusion: '${{ steps.plan.conclusion }}'
-          })
+
+          // Update check run for PR events only
+          if (context.eventName !== 'workflow_dispatch') {
+            github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id:  '${{ steps.plan_status_check.outputs.CHECK_ID }}',
+              status: 'completed',
+              completed_at: formatDate(),
+              conclusion: '${{ steps.plan.conclusion }}'
+            })
+          }
+
           const run_url = process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID
           const run_link = '<a href="' + run_url + '">Actions</a>.'
-          const fs = require('fs')
-          const plan_file = fs.readFileSync('plan.out', 'utf8').toString()
-          const plan = plan_file.length > 65000 ? "...\n" + plan_file.substring(plan_file.length - 65000) : plan_file
-          const truncated_message = plan_file.length > 65000 ? "Output is too long and was truncated. You can see full plan in " + run_link + "<br /><br />" : ""
-          const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          #### Terraform Format and Style 🖌 \`${{ steps.fmt.outcome }}\`
-          #### Terraform Initialization ⚙️ \`${{ steps.init.outcome }}\`
-          #### Terraform Validation 🤖 \`${{ steps.validate.outcome }}\`
-          <details><summary>Validation Output</summary>
 
-          ~~~
-          ${{ steps.validate.outputs.stdout }}
-          ~~~
+          // Read plan file if it exists
+          let plan_file = '';
+          try {
+            plan_file = fs.readFileSync('plan.out', 'utf8').toString()
+          } catch (e) {
+            plan_file = 'Plan file not found or plan step failed. Check previous step logs.'
+          }
 
-          </details>
+          // For workflow_dispatch summaries, be more aggressive with truncation (GitHub limit ~1MB)
+          const maxLength = context.eventName === 'workflow_dispatch' ? 30000 : 65000
+          const plan = plan_file.length > maxLength ? "...\n" + plan_file.substring(plan_file.length - maxLength) : plan_file
+          const truncated_message = plan_file.length > maxLength ? `Output was truncated to last ${maxLength} characters. [View full plan in workflow logs](${run_url})` : ""
 
-          #### Terraform Plan 📖 \`${{ steps.plan.outcome }}\`
+          // For workflow_dispatch: post to workflow summary
+          if (context.eventName === 'workflow_dispatch') {
+            // Extract resource summary from plan if available
+            const summaryMatch = plan_file.match(/Plan: (\d+) to add, (\d+) to change, (\d+) to destroy\./);
+            const planSummary = summaryMatch ? `\n\n**Summary:** ${summaryMatch[0]}` : '';
 
-          <details><summary>Show Plan</summary>
+            // Use raw markdown for details tag since addDetails might not be available
+            await core.summary
+              .addHeading('Terraform Plan Results', 2)
+              .addRaw(`**Format and Style** 🖌 \`${{ steps.fmt.outcome }}\`\n\n`)
+              .addRaw(`**Initialization** ⚙️ \`${{ steps.init.outcome }}\`\n\n`)
+              .addRaw(`**Validation** 🤖 \`${{ steps.validate.outcome }}\`\n\n`)
+              .addRaw(planSummary)
+              .addHeading('Terraform Plan Output', 3)
+              .addRaw(truncated_message ? `⚠️ ${truncated_message}\n\n` : '')
+              .addRaw(`<details><summary>Show Plan</summary>\n\n\`\`\`terraform\n${plan}\n\`\`\`\n\n</details>`)
+              .write()
+            console.log('✅ Plan posted to workflow summary')
+          }
+          // For PR events: post to PR comment (existing behavior)
+          else {
+            const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            #### Terraform Format and Style 🖌 \`${{ steps.fmt.outcome }}\`
+            #### Terraform Initialization ⚙️ \`${{ steps.init.outcome }}\`
+            #### Terraform Validation 🤖 \`${{ steps.validate.outcome }}\`
+            <details><summary>Validation Output</summary>
 
-          ~~~
-          ${plan}
-          ~~~
+            ~~~
+            ${{ steps.validate.outputs.stdout }}
+            ~~~
 
-          </details>
+            </details>
 
-          Respond with \`GithubDeploy\` to deploy and merge changes.
-          ${truncated_message}`;
+            #### Terraform Plan 📖 \`${{ steps.plan.outcome }}\`
 
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          })
+            <details><summary>Show Plan</summary>
+
+            ~~~
+            ${plan}
+            ~~~
+
+            </details>
+
+            Respond with \`GithubDeploy\` to deploy and merge changes.
+            ${truncated_message}`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+          }
 
     ##############################################
     #                                            #
@@ -494,7 +551,7 @@ runs:
     ##############################################
 
     - name: Create apply status check
-      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') }}
       uses: actions/github-script@v7
       id: apply_status_check
       with:
@@ -513,41 +570,15 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Terraform - Apply
-      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ (github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy')) || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["true", true]'), env.triggeredByComment)) }}
       id: apply
       shell: bash
       run: |
-        set +e
-        check_lock() {
-          ERROR_OUTPUT=$(terraform plan -json -var-file globals/globals.tfvars -var-file ${{ steps.get-label.outputs.environment }}/${{ steps.get-label.outputs.environment }}.tfvars 2>&1)
-          if [[ $ERROR_OUTPUT == *"Error acquiring the state lock"* ]]; then
-            LOCK_ID=$(echo $ERROR_OUTPUT | jq -r .diagnostic.detail | grep -A 1 "Lock Info" | awk '/ID:/ {print $2; exit}')
-            echo "State is locked. Lock ID:"
-            echo "$LOCK_ID"
-
-            echo "Attempting to unlock terraform state"
-            if terraform force-unlock --force "${LOCK_ID}"; then
-              echo "Terraform state has been successfully unlocked!"
-              echo "Trying to apply again.."
-              terraform apply -auto-approve -no-color ${GITHUB_WORKSPACE}/plan.tfplan > ${GITHUB_WORKSPACE}/apply.out
-            else
-              echo "Failed to unlock the state."
-              return 1
-            fi
-          elif [[ $ERROR_OUTPUT == *"Error:"* ]]; then
-            echo "Error occurred while checking Terraform state:"
-            echo "$ERROR_OUTPUT"
-            return 1
-          else
-            echo "State is not locked. No action needed."
-            terraform apply -auto-approve -no-color ${GITHUB_WORKSPACE}/plan.tfplan > ${GITHUB_WORKSPACE}/apply.out
-          fi
-        }
-        check_lock
+        terraform apply -auto-approve -no-color ${GITHUB_WORKSPACE}/plan.tfplan > ${GITHUB_WORKSPACE}/apply.out
       working-directory: terraform
 
     - name: Post apply outputs and update status check
-      if: ${{ github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') && always() }}
+      if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') && always() }}
       uses: actions/github-script@v7
       with:
         script: |
@@ -594,7 +625,7 @@ runs:
     ##############################################
 
     - name: Create after status check
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true'
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && steps.apply.conclusion != 'skipped' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
       uses: actions/github-script@v7
       id: after_status_check
       with:
@@ -613,14 +644,14 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Run scripts in after_scripts
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true'
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && steps.apply.conclusion != 'skipped'
       id: after_scripts
       uses: TRI-Actions/custom-actions/actions/run-script@main
       with:
         path: app_build_scripts/after_scripts
       env:
         environment: ${{ steps.get-label.outputs.environment }}
-        triggeredByComment: ${{ contains(github.event.comment.body, 'GithubDeploy') }}
+        triggeredByComment: ${{ startsWith(github.event.comment.body, 'GithubDeploy') }}
 
     - name: Post after script outputs and update status check
       if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && always() && (steps.after_scripts.conclusion == 'success' || steps.after_scripts.conclusion == 'failure')
@@ -637,32 +668,52 @@ runs:
           const formatDate = () => {
             return new Date().toISOString()
           }
-          github.rest.checks.update({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            check_run_id:  '${{ steps.after_status_check.outputs.CHECK_ID }}',
-            status: 'completed',
-            completed_at: formatDate(),
-            conclusion: '${{ steps.after_scripts.conclusion }}'
-          })
-          const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
-          #### After Scripts Output 🖌
-          <details><summary>After Scripts Output</summary>
 
-          ~~~
-          ${logs}
-          ~~~
+          const run_url = process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID
+          const maxLength = 30000
+          const std_out = logs.length > maxLength ? "...\n" + logs.substring(logs.length - maxLength) : logs
+          const truncated_message = logs.length > maxLength ? `Output was truncated to last ${maxLength} characters. [View full logs](${run_url})` : ""
 
-          </details>`;
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          })
+          // For workflow_dispatch: post to workflow summary
+          if (context.eventName === 'workflow_dispatch') {
+            await core.summary
+              .addHeading('After Scripts Output', 3)
+              .addRaw(truncated_message ? `⚠️ ${truncated_message}\n\n` : '')
+              .addRaw(`<details><summary>Show After Scripts Output</summary>\n\n\`\`\`\n${std_out}\n\`\`\`\n\n</details>`)
+              .write()
+            console.log('✅ After scripts output posted to workflow summary')
+          }
+          // For PR events: update check and post comment
+          else {
+            github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id:  '${{ steps.after_status_check.outputs.CHECK_ID }}',
+              status: 'completed',
+              completed_at: formatDate(),
+              conclusion: '${{ steps.after_scripts.conclusion }}'
+            })
+
+            const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+            #### After Scripts Output 🖌
+            <details><summary>After Scripts Output</summary>
+
+            ~~~
+            ${logs}
+            ~~~
+
+            </details>`;
+
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+          }
     - name: Merge Branch
       uses: actions/github-script@v7
-      if: ${{ job.status == 'success' && github.event.issue.pull_request && contains(github.event.comment.body, 'GithubDeploy') }}
+      if: ${{ job.status == 'success' && github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') }}
       with:
         script: |
             github.rest.pulls.merge({
