@@ -304,7 +304,7 @@ runs:
     ##############################################
 
     - name: Create before status check
-      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
+      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled != 'false' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
       uses: actions/github-script@v7
       id: before_status_check
       with:
@@ -323,7 +323,7 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Run scripts in before_scripts
-      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true'
+      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled != 'false'
       id: before_scripts
       uses: TRI-Actions/custom-actions/actions/run-script@main
       with:
@@ -333,7 +333,7 @@ runs:
         triggeredByComment: ${{ startsWith(github.event.comment.body, 'GithubDeploy') }}
 
     - name: Post before script outputs and update status check
-      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled == 'true' && always() && (steps.before_scripts.conclusion == 'success' || steps.before_scripts.conclusion == 'failure')
+      if: steps.parse-yaml.outputs.app_build_before_terraform_enabled != 'false' && always() && (steps.before_scripts.conclusion == 'success' || steps.before_scripts.conclusion == 'failure')
       uses: actions/github-script@v7
       with:
         script: |
@@ -578,28 +578,41 @@ runs:
       working-directory: terraform
 
     - name: Post apply outputs and update status check
-      if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') && always() }}
+      if: always() && steps.apply.conclusion != 'skipped' && (github.event_name == 'workflow_dispatch' || (github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy')))
       uses: actions/github-script@v7
       with:
         script: |
           const formatDate = () => {
             return new Date().toISOString()
           }
-          github.rest.checks.update({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            check_run_id:  '${{ steps.apply_status_check.outputs.CHECK_ID }}',
-            status: 'completed',
-            completed_at: formatDate(),
-            conclusion: '${{ steps.apply.conclusion }}'
-          })
           const run_url = process.env.GITHUB_SERVER_URL + '/' + process.env.GITHUB_REPOSITORY + '/actions/runs/' + process.env.GITHUB_RUN_ID
           const run_link = '<a href="' + run_url + '">Actions</a>.'
           const fs = require('fs')
           const apply_out_file = fs.readFileSync('apply.out', 'utf8').toString()
-          const apply_out = apply_out_file.length > 65000 ? "...\n" + apply_out_file.substring(apply_out_file.length - 65000) : apply_out_file
-          const truncated_message = apply_out_file.length > 65000 ? "Output is too long and was truncated. You can see full apply output in " + run_link + "<br /><br />" : ""
-          const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          const maxLength = context.eventName === 'workflow_dispatch' ? 30000 : 65000
+          const apply_out = apply_out_file.length > maxLength ? "...\n" + apply_out_file.substring(apply_out_file.length - maxLength) : apply_out_file
+          const truncated_message = apply_out_file.length > maxLength ? `Output was truncated to last ${maxLength} characters. [View full apply logs](${run_url})` : ""
+
+          // For workflow_dispatch: post to workflow summary
+          if (context.eventName === 'workflow_dispatch') {
+            await core.summary
+              .addHeading('Terraform Apply Results', 2)
+              .addRaw(truncated_message ? `⚠️ ${truncated_message}\n\n` : '')
+              .addRaw(`<details><summary>Show Apply Output</summary>\n\n\`\`\`\n${apply_out}\n\`\`\`\n\n</details>`)
+              .write()
+            console.log('✅ Apply output posted to workflow summary')
+          }
+          // For PR events: update check and post comment
+          else {
+            github.rest.checks.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              check_run_id:  '${{ steps.apply_status_check.outputs.CHECK_ID }}',
+              status: 'completed',
+              completed_at: formatDate(),
+              conclusion: '${{ steps.apply.conclusion }}'
+            })
+            const output = `Run [#${{ github.run_number }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           #### Terraform Apply 📖 \`${{ steps.apply.outcome }}\`
 
           <details><summary>Show Apply Output</summary>
@@ -611,12 +624,13 @@ runs:
           </details>
           ${truncated_message}`;
 
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: output
-          })
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: output
+            })
+          }
 
     ##############################################
     #                                            #
@@ -625,7 +639,7 @@ runs:
     ##############################################
 
     - name: Create after status check
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && steps.apply.conclusion != 'skipped' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled != 'false' && steps.apply.conclusion != 'skipped' && (github.event_name == 'pull_request' || github.event_name == 'issue_comment')
       uses: actions/github-script@v7
       id: after_status_check
       with:
@@ -644,7 +658,7 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Run scripts in after_scripts
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && steps.apply.conclusion != 'skipped'
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled != 'false' && steps.apply.conclusion != 'skipped'
       id: after_scripts
       uses: TRI-Actions/custom-actions/actions/run-script@main
       with:
@@ -654,7 +668,7 @@ runs:
         triggeredByComment: ${{ startsWith(github.event.comment.body, 'GithubDeploy') }}
 
     - name: Post after script outputs and update status check
-      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled == 'true' && always() && (steps.after_scripts.conclusion == 'success' || steps.after_scripts.conclusion == 'failure')
+      if: steps.parse-yaml.outputs.app_build_after_terraform_enabled != 'false' && always() && (steps.after_scripts.conclusion == 'success' || steps.after_scripts.conclusion == 'failure')
       uses: actions/github-script@v7
       with:
         script: |
