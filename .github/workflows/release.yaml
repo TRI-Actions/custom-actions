@@ -1,0 +1,214 @@
+name: release
+run-name: release (${{ github.event_name }}${{ github.event.action && format(' / {0}', github.event.action) || '' }})
+
+# Per-action semver releases for TRI-Actions/custom-actions.
+#
+# Two trigger paths:
+#   pull_request (opened/synchronize/reopened/labeled/unlabeled)
+#     -> "preview": create/refresh RC tags '<action>/vX.Y.Z-rc.<PR>' at PR head
+#   issue_comment (created, body exactly '!publish')
+#     -> "publish": cut stable '<action>/vX.Y.Z' tags, force-move '<action>/vX',
+#        create gh release, cleanup RC tags, merge the PR
+#
+# All logic lives in .github/scripts/release.sh so it is unit-testable locally.
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: write        # push tags + create releases
+  pull-requests: write   # comment on PR, add labels, merge PR
+  issues: write          # gh pr comment uses the issues comments endpoint
+
+# Concurrency: single group scoped to the PR (or ref for edge cases).
+# Matches tf-modules: newer runs on the same PR supersede older ones. The
+# publish path is idempotent (see publish_one healing logic) so cancel-in-progress
+# is safe: a re-run either heals a partial state or resumes from where it left off.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.event.issue.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  release:
+    # Workflow-level gate. Each branch of this expression corresponds to one
+    # of the two trigger paths. The script is defense-in-depth for the
+    # same checks, but keeping the gate here means fork PRs and unrelated
+    # label events never occupy a runner.
+    #
+    #  - pull_request: same-repo only (no forks). All non-label actions pass
+    #    unconditionally; labeled/unlabeled must be one of the three bump
+    #    labels (major/minor/patch) - other label churn does not trigger a
+    #    release.
+    #  - issue_comment: must be on a PR (not a bare issue) and the body must
+    #    equal '!publish' exactly (matches tf-modules; prevents '!publisher'
+    #    or '!publish patch' from firing). Fork status and commenter write
+    #    permission are re-checked in the Resolve step (issue_comment
+    #    payloads do not carry fork status directly, and author_association
+    #    is not equivalent to write access).
+    if: >-
+      (
+        github.event_name == 'pull_request'
+        && github.event.pull_request.head.repo.fork == false
+        && (
+          contains(fromJSON('["opened","synchronize","reopened"]'), github.event.action)
+          || (
+            contains(fromJSON('["labeled","unlabeled"]'), github.event.action)
+            && contains(fromJSON('["major","minor","patch"]'), github.event.label.name)
+          )
+        )
+      )
+      ||
+      (
+        github.event_name == 'issue_comment'
+        && github.event.issue.pull_request != null
+        && github.event.comment.body == '!publish'
+      )
+    runs-on: ubuntu-latest
+    steps:
+      # PR context is trivial on pull_request events, but on issue_comment we
+      # only have the issue payload - we must ask the API for the PR head SHA
+      # and base ref. Doing it here (once, upfront) means the script never
+      # branches on event type to find its inputs.
+      #
+      # For issue_comment events, this step also enforces the write-permission
+      # check for the commenter and the fork-status check for the PR, since
+      # neither is available in the workflow if: expression for issue_comment
+      # payloads.
+      - name: Resolve PR context
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER_PR: ${{ github.event.pull_request.number }}
+          PR_NUMBER_ISSUE: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA_PR: ${{ github.event.pull_request.head.sha }}
+          BASE_REF_PR: ${{ github.event.pull_request.base.ref }}
+          HEAD_REPO_FORK_PR: ${{ github.event.pull_request.head.repo.fork }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" == "pull_request" ]]; then
+            pr="$PR_NUMBER_PR"
+            head_sha="$HEAD_SHA_PR"
+            base_ref="$BASE_REF_PR"
+            is_fork="$HEAD_REPO_FORK_PR"
+          else
+            # issue_comment: fetch the PR to learn head SHA, base ref, and
+            # fork status. Any of these could have changed since the last
+            # PR event, so we re-read them fresh.
+            pr="$PR_NUMBER_ISSUE"
+            payload="$(gh api "repos/${REPO}/pulls/${pr}")"
+            head_sha="$(printf '%s' "$payload" | jq -r '.head.sha')"
+            base_ref="$(printf '%s' "$payload" | jq -r '.base.ref')"
+            is_fork="$(printf '%s' "$payload" | jq -r '.head.repo.fork // false')"
+
+            # author_association (OWNER/MEMBER/COLLABORATOR) is not equivalent
+            # to write access. Look up the real permission for the commenter
+            # via the collaborators/{user}/permission endpoint. Fail closed on
+            # any error (the endpoint 404s for non-collaborators, which is
+            # exactly the reject case).
+            perm="$(gh api "repos/${REPO}/collaborators/${COMMENT_USER}/permission" -q '.permission' 2>/dev/null || echo 'none')"
+            case "$perm" in
+              admin|maintain|write) ;;
+              *)
+                echo "::error::user '${COMMENT_USER}' has permission '${perm}' on ${REPO}; !publish requires write access."
+                exit 1 ;;
+            esac
+          fi
+          if [[ "$is_fork" == "true" ]]; then
+            echo "::error::PR #${pr} originates from a fork; release workflow will not run."
+            exit 1
+          fi
+          if [[ -z "$head_sha" || -z "$base_ref" || -z "$pr" ]]; then
+            echo "::error::could not resolve PR context (pr='$pr' head='$head_sha' base='$base_ref')"
+            exit 1
+          fi
+          {
+            echo "pr_number=$pr"
+            echo "head_sha=$head_sha"
+            echo "base_ref=$base_ref"
+          } >> "$GITHUB_OUTPUT"
+
+      # Immediate feedback for the operator on !publish: post a marker-tagged
+      # 'publishing initiated' comment before the release run starts. The
+      # script's later 'release-publish:<pr>' comment will supersede this one
+      # because they share the same marker.
+      - name: Acknowledge publish command
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+        run: |
+          set -euo pipefail
+          note="$(mktemp)"
+          printf '<!-- release-publish:%s -->\nPublishing initiated at `%s`. Running validation and cutting releases...\n' \
+            "$PR_NUMBER" "$HEAD_SHA" > "$note"
+          gh pr comment "$PR_NUMBER" --body-file "$note" >/dev/null 2>&1 || true
+          rm -f "$note"
+
+      - name: Checkout at PR head (full history + tags)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.pr.outputs.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Configure git identity for annotated tags
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # Reject any PR that is behind its base branch. Otherwise a preview or
+      # !publish could tag (and later merge) a HEAD that pre-dates main,
+      # regressing whatever landed after this PR forked.
+      - name: Check branch sync
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BASE_REF: ${{ steps.pr.outputs.base_ref }}
+          HEAD_SHA: ${{ steps.pr.outputs.head_sha }}
+          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin "$BASE_REF"
+          behind="$(git rev-list --count "${HEAD_SHA}..origin/${BASE_REF}")"
+          if [[ "$behind" != "0" ]]; then
+            note="$(mktemp)"
+            printf '<!-- release-branch-sync:%s -->\nPR is %s commit(s) behind `origin/%s`. Rebase or merge `%s` into this branch and re-run.\n' \
+              "$PR_NUMBER" "$behind" "$BASE_REF" "$BASE_REF" > "$note"
+            gh pr comment "$PR_NUMBER" --body-file "$note" >/dev/null 2>&1 || true
+            rm -f "$note"
+            echo "::error::PR #${PR_NUMBER} is ${behind} commit(s) behind origin/${BASE_REF}"
+            exit 1
+          fi
+
+      - name: Release
+        env:
+          # MODE selects the script's top-level dispatch. Computed from the
+          # event so the script itself never inspects github.event.*.
+          MODE: >-
+            ${{
+              (github.event_name == 'issue_comment' && 'publish')
+              || 'preview'
+            }}
+          PR_NUMBER:    ${{ steps.pr.outputs.pr_number }}
+          BASE_REF:     ${{ steps.pr.outputs.base_ref }}
+          HEAD_SHA:     ${{ steps.pr.outputs.head_sha }}
+          # EVENT_ACTION lets the preview mode distinguish 'unlabeled with no
+          # remaining version label' (silent skip) from other triggers (auto
+          # add 'patch').
+          EVENT_ACTION: ${{ github.event.action }}
+          # PR_LABELS_JSON is the event-snapshot label list, only meaningful
+          # for pull_request events. Wrapped via toJSON to guarantee it's a
+          # well-formed JSON literal in the env value and cannot be interpreted
+          # by the shell.
+          PR_LABELS_JSON: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: bash .github/scripts/release.sh
