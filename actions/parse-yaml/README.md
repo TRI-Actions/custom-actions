@@ -148,3 +148,5 @@ jobs:
         echo "Prod Cluster: ${{ steps.yaml-output-deployment.outputs.prod-cluster-name }}"
         echo "Region: ${{ steps.yaml-output-deployment.outputs.region }}"
 ```
+
+<!-- release smoke test 2026-09-03 -->
