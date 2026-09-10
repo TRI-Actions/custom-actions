@@ -1,23 +1,40 @@
-#!/bin/bash
+#!/usr/bin/env bash
+#
+# 'pulumi destroy' in every workdir in $WORKDIRS, output teed to ./destroy.out.
+#
+# Env:
+#   WORKDIRS  space-separated relative paths (default '.')
+
+# pipefail: pulumi is piped into tee, which would otherwise mask its exit status.
+# '-e' is omitted so the workdir loop survives one failing workdir.
+set -uo pipefail
+
 export CI=1
 
-REPO_NAME=$(echo $GITHUB_REPOSITORY | cut -d'/' -f2)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=common.sh
+source "$SCRIPT_DIR/common.sh"
 
-pulumi login s3://tri-pulumi-state-us-east-1/$REPO_NAME
+readonly OUT_FILE="destroy.out"
 
-for i in $WORKDIRS; do
-  if [ ! -d $i ]; then
-    echo $i is not a directory, skipping..
-    continue
+# Deliberately does not select a stack, matching prior behaviour: destroy relies
+# on whichever stack the backend already has selected.
+destroy_one() {
+  local dir="$1"
+
+  if ! pulumi destroy --yes --non-interactive --color=never 2>&1 | tee "$OUT_FILE"; then
+    err "pulumi destroy failed for ${dir}; see ${dir}/${OUT_FILE}"
+    return 1
   fi
 
-  cd $i
-  echo Destroying $i
-  pulumi destroy --yes --non-interactive --color=never 2>&1 | tee destroy.out
+  return 0
+}
 
-  if [ ! $i == '.' ]; then
-    cd ..
-  fi
-done
+main() {
+  pulumi_login
+  for_each_workdir destroy destroy_one
+  emit_summary destroy
+  finish
+}
 
-exit
+main "$@"

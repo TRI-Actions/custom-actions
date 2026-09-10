@@ -2,7 +2,7 @@
 
 This action provides a wrapper around the Pulumi CLI to make its use easier within other GitHub Actions workflows.
 
-It supports plan, deploy and destroy options. Plan option will also check the drift status of deployed resources and won't proceed if a drift is detected.
+It supports plan, deploy and destroy options. With `drift_check` enabled, the plan option also reports the drift status of deployed resources via the `drift-status` output, leaving it to the calling workflow to decide whether to proceed.
 
 ## Parameters
 
@@ -13,13 +13,37 @@ There are two parameters required to use this action:
 * `drift_check`: Whether drift check will run or not. Default value is `false`
 * `update_state`: Option to update only state to match the infrastructure. Default value is `false`
 
+## Failure behaviour
+
+Any Pulumi error fails the step. If you pass several workdirs, all of them are still
+attempted - one failing stack does not stop the rest - and the step fails at the end
+with a table in the job summary showing which workdirs succeeded and which did not.
+
+The `*.out` files are still written for failed runs, so you can upload them as artifacts
+or post them to a PR comment regardless of the outcome.
+
+A `workdirs` value where no entry is an existing directory fails the step, rather than
+silently doing nothing.
+
 ## Outputs
 
-This action generates two different types of outputs. One within the Github Actions context and the other one as a file which contains the outputs of the Pulumi operation that's been run.
-Plan option will generate a `plan.out` file that you can find at the workdir you passed as an argument. (Or root of your repo if you haven't explicitly passed a workdir.)
-Similarly deploy option will generate a `deploy.out` and destroy option will generate a `destroy.out` at the same location.
+Each action writes a log file into every workdir it ran in: `plan.out` for `plan`,
+`deploy.out` for `deploy`, `destroy.out` for `destroy`. (The workdir is the root of your
+repository if you did not pass one.) With `drift_check` enabled, `plan` also writes a
+`drift.out` per workdir holding that workdir's individual verdict.
 
-The output in actions context is `drift-status` and can either `DRIFTED` or `IN-SYNC`.
+Whichever action ran, these outputs are set in the Actions context:
+
+| Output | Value |
+|---|---|
+| `status` | `success` if every workdir succeeded, otherwise `failure`. |
+| `output-files` | Newline-separated absolute paths of the log files, one per workdir that produced one. Includes failed workdirs, so you can read the error. |
+| `failed-workdirs` | Space-separated workdirs that failed, in the same format as the `workdirs` input. Empty on success. |
+| `drift-status` | `DRIFTED` if any workdir has drifted, otherwise `IN-SYNC`. Only set by the `plan` action. |
+
+They are set even when the step fails, so a reporting step can consume them - but it must
+say `if: always()`, or it will be skipped on exactly the runs where the output matters
+most.
 
 ## Example
 
@@ -27,9 +51,31 @@ The output in actions context is `drift-status` and can either `DRIFTED` or `IN-
 - name: Pulumi Plan
   id: plan
   uses: TRI-Actions/custom-actions/actions/pulumi-cli@main
-    with:
-      workdir: ${{ inputs.acccount_id }}
-      action: plan
-- name: Drift result
-  run: echo "${{ steps.plan.outputs.drift-status }}"
+  with:
+    action: plan
+    workdirs: dev stg
+- name: Report
+  if: always()
+  run: |
+    echo "status: ${{ steps.plan.outputs.status }}"
+    echo "drift:  ${{ steps.plan.outputs.drift-status }}"
+    echo "failed: ${{ steps.plan.outputs.failed-workdirs }}"
+    while read -r file; do
+      [ -n "$file" ] && cat "$file"
+    done <<< "${{ steps.plan.outputs.output-files }}"
 ```
+
+## Tests
+
+```bash
+actions/pulumi-cli/test/run-tests.sh          # all cases
+actions/pulumi-cli/test/run-tests.sh deploy   # filter by name substring
+```
+
+The suite runs the real `plan.sh` / `deploy.sh` / `destroy.sh` against a fake `pulumi`
+on `PATH` (`test/stub/pulumi`) in a temp sandbox, so it needs no AWS credentials, no
+state backend and no network. It covers exit-code propagation for each operation,
+multi-workdir aggregation, nested workdirs, and the `drift-status` output.
+
+Run it after touching any of the scripts - the failure-propagation cases are the ones
+that matter, since 19 of the 23 fail against the pre-fix scripts.

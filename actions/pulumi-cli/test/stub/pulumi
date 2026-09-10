@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+#
+# Fake 'pulumi' CLI for run-tests.sh, placed ahead of any real pulumi on $PATH so
+# the action scripts run unmodified with no credentials, backend or network.
+#
+# Knobs:
+#   STUB_LOG              file to append "<basename of cwd><TAB><argv>" per call
+#   STUB_FAIL_CMDS        subcommands that must fail, e.g. "up" or "preview
+#                         refresh". 'stack select'/'stack init' are keyed as
+#                         "stack-select"/"stack-init"
+#   STUB_FAIL_IN_DIR      restrict STUB_FAIL_CMDS to the workdir with this basename
+#   STUB_NO_STACK         'stack select' fails, forcing 'stack init'
+#   STUB_FAIL_INIT        'stack init' fails too
+#   STUB_DRIFT            preview emits pulumi's "Note: Objects have changed" line
+#   STUB_DRIFT_IN_DIR     restrict STUB_DRIFT to the workdir with this basename
+#   STUB_PREVIEW_MARKER   'none' omits the "Pulumi used the selected providers" line
+#   STUB_PREVIEW_EXTRA    an extra line injected into preview output
+set -uo pipefail
+
+cmd="${1:-}"
+sub="${2:-}"
+cwd_name="$(basename "$PWD")"
+
+if [[ "$cmd" == "stack" ]]; then
+  key="stack-${sub}"
+else
+  key="$cmd"
+fi
+
+if [[ -n "${STUB_LOG:-}" ]]; then
+  printf '%s\t%s\n' "$cwd_name" "$*" >> "$STUB_LOG"
+fi
+
+in_list() {
+  local needle="$1" list="$2"
+  case " ${list} " in
+    *" ${needle} "*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+should_fail() {
+  in_list "$key" "${STUB_FAIL_CMDS:-}" || return 1
+  if [[ -n "${STUB_FAIL_IN_DIR:-}" && "$cwd_name" != "${STUB_FAIL_IN_DIR}" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+should_drift() {
+  [[ -n "${STUB_DRIFT:-}" ]] || return 1
+  if [[ -n "${STUB_DRIFT_IN_DIR:-}" && "$cwd_name" != "${STUB_DRIFT_IN_DIR}" ]]; then
+    return 1
+  fi
+  return 0
+}
+
+# Output comes first, then the failure, so tests can assert the *.out artifacts
+# survive a failed run.
+case "$key" in
+  login)
+    echo "Logged in to stub-backend as tester"
+    ;;
+  stack-select)
+    if [[ -n "${STUB_NO_STACK:-}" ]]; then
+      echo "error: no stack named 'main' found" >&2
+      exit 1
+    fi
+    ;;
+  stack-init)
+    if [[ -n "${STUB_FAIL_INIT:-}" ]]; then
+      echo "error: could not create stack 'main'" >&2
+      exit 1
+    fi
+    echo "Created stack 'main'"
+    ;;
+  refresh)
+    echo "Refreshing (main):"
+    echo "STUB-REFRESH-OUTPUT"
+    ;;
+  preview)
+    echo "Previewing update (main):"
+    echo "STUB-PREVIEW-PREAMBLE"
+    if should_drift; then
+      echo "Note: Objects have changed outside of Pulumi"
+    fi
+    if [[ "${STUB_PREVIEW_MARKER:-}" != "none" ]]; then
+      echo "Pulumi used the selected providers to generate the following update:"
+    fi
+    echo "    + aws:s3:Bucket example create"
+    if [[ -n "${STUB_PREVIEW_EXTRA:-}" ]]; then
+      echo "    ${STUB_PREVIEW_EXTRA}"
+    fi
+    echo "Resources:"
+    echo "    + 1 to create"
+    ;;
+  up)
+    echo "Updating (main):"
+    echo "STUB-UP-OUTPUT"
+    ;;
+  destroy)
+    echo "Destroying (main):"
+    echo "STUB-DESTROY-OUTPUT"
+    ;;
+  *)
+    echo "stub pulumi: unhandled subcommand '$*'" >&2
+    exit 127
+    ;;
+esac
+
+if should_fail; then
+  echo "error: simulated ${key} failure in ${cwd_name}" >&2
+  exit 1
+fi
+
+exit 0
