@@ -17,6 +17,13 @@
 #   STUB_PREVIEW_EXTRA    an extra line injected into preview output
 #   STUB_LOGIN_ERROR      text for a realistic 'pulumi login' failure, e.g. an
 #                         unassumable role. Implies login fails.
+#   STUB_WRAPPED_ERROR    cause text for a failure in STUB_FAIL_CMDS, reported in
+#                         pulumi's real diagnostic shape: a generic wrapper 'error:'
+#                         line, the causes indented and bulleted below it, and a second
+#                         wrapper line last. Replaces the flat one-line failure.
+#                         '|'-separated for several causes under the one wrapper.
+#   STUB_BARE_ERROR       like STUB_WRAPPED_ERROR but with no wrapper above the cause,
+#                         only the trailing 'error: <cmd> failed' summary below it
 set -uo pipefail
 
 cmd="${1:-}"
@@ -118,6 +125,38 @@ case "$key" in
 esac
 
 if should_fail; then
+  # Pulumi names the operation, not the subcommand, in its trailing summary line:
+  # 'pulumi up' fails with 'error: update failed'.
+  case "$key" in
+    up) phase="update" ;;
+    *) phase="$key" ;;
+  esac
+  if [[ -n "${STUB_WRAPPED_ERROR:-}" ]]; then
+    IFS='|' read -r -a causes <<< "${STUB_WRAPPED_ERROR}"
+    {
+      echo "Diagnostics:"
+      echo "  pulumi:pulumi:Stack (example-main):"
+      if (( ${#causes[@]} == 1 )); then
+        echo "    error: Preview failed: 1 error occurred:"
+      else
+        echo "    error: Preview failed: ${#causes[@]} errors occurred:"
+      fi
+      for cause in "${causes[@]}"; do
+        printf '    \t* %s\n' "$cause"
+      done
+      echo ""
+      echo "error: ${phase} failed"
+    } >&2
+    exit 255
+  fi
+  if [[ -n "${STUB_BARE_ERROR:-}" ]]; then
+    {
+      echo "    ${STUB_BARE_ERROR}"
+      echo ""
+      echo "error: ${phase} failed"
+    } >&2
+    exit 255
+  fi
   echo "error: simulated ${key} failure in ${cwd_name}" >&2
   exit 1
 fi

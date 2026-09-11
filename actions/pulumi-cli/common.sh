@@ -10,6 +10,11 @@ readonly PULUMI_STATE_BUCKET="tri-pulumi-state-us-east-1"
 # delimiter would truncate the value and let the rest be read as more output keys.
 readonly OUTPUT_DELIMITER="PULUMI_CLI_EOF"
 
+# Most causes reported per failing workdir. Pulumi lists one per failing resource, and
+# 'error-message' is a job output rather than a log, so past a point the extra lines stop
+# being a summary. The remainder stay in the log file that 'output-files' points at.
+readonly MAX_CAUSES=10
+
 FAILED=0
 RESULT_ROWS=()
 OUTPUT_FILES=()
@@ -37,15 +42,91 @@ record_failure() {
   printf '%s: %s\n' "$1" "$2" >> "$REASONS_FILE" 2>/dev/null || true
 }
 
-# The most informative single line of a pulumi log: its 'error:' line if there is
-# one, otherwise the last non-blank line.
-error_line() {
-  grep -m1 -E '^[[:space:]]*error:' "$1" 2>/dev/null && return 0
-  grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -n 1
+# The informative lines of a pulumi log, one per line, most specific first.
+#
+# Pulumi reports a failure as a generic wrapper line - 'error: Preview failed: 3 errors
+# occurred:', or a trailing 'error: update failed' - with the real causes below it, one
+# indented bullet each. Quoting the wrapper says only what 'status' already said, and
+# quoting one bullet understates a stack that broke in several places, so wrappers are
+# skipped and every cause is reported. In preference order:
+#   1. every non-wrapper error line, and every bullet under a wrapper. Bullets count
+#      whatever their wording, which catches causes that do not start with 'error'
+#      ('* AccessDenied: User ... is not authorized to perform: sts:AssumeRole').
+#   2. the first line under a wrapper, for a wrapper that bullets nothing
+#   3. the wrapper itself, then the last non-blank line
+# Indentation and bullets are trimmed, because each line is quoted inline in a reason.
+error_lines() {
+  awk -v max="$MAX_CAUSES" '
+    {
+      line = $0
+      sub(/^[[:space:]]+/, "", line)
+      # Also drops a trailing CR, so a log with CRLF endings does not keep it.
+      sub(/[[:space:]]+$/, "", line)
+      if (line == "") next
+      last = line
+
+      # Only "*", never "-" or "+": those two lead every line of a pulumi diff, so
+      # treating them as bullets would report deleted resources as failure causes.
+      bullet = 0
+      if (line ~ /^\*[[:space:]]+/) {
+        bullet = 1
+        sub(/^\*[[:space:]]+/, "", line)
+        if (line == "") next
+      }
+
+      # Matches "error:" and "Error:", and also "error configuring ...", which is how
+      # the bridged providers word their own causes.
+      is_error = (line ~ /^[Ee]rror[: ]/)
+
+      lower = tolower(line)
+      if (is_error && (lower ~ /^error:[[:space:]]*$/ ||
+                       lower ~ /^error:[[:space:]]+[0-9]+[[:space:]]+errors?[[:space:]]+occurred/ ||
+                       lower ~ /^error:[[:space:]]+(preview|update|refresh|destroy|import) failed/)) {
+        if (wrapper == "") wrapper = line
+        seen_wrapper = 1
+        next
+      }
+
+      # A bullet only counts once a wrapper has introduced its list, so a stray "*" in
+      # the body of a plan cannot be mistaken for a cause.
+      if (is_error || (bullet && seen_wrapper)) {
+        n++
+        if (n <= max) cause[n] = line
+        next
+      }
+
+      if (seen_wrapper && after == "") after = line
+    }
+    END {
+      if (n > 0) {
+        for (i = 1; i <= n && i <= max; i++) print cause[i]
+        if (n > max) printf "... and %d more (see the log)\n", n - max
+      }
+      else if (after != "")   print after
+      else if (wrapper != "") print wrapper
+      else if (last != "")    print last
+    }
+  ' "$1" 2>/dev/null
 }
 
-captured_error_line() {
-  error_line <(printf '%s\n' "$CAPTURED")
+# record_failures <context> <summary> <log_file>
+# Adds one 'error-message' line per cause in <log_file>, each carrying the context and
+# the same summary. Repeating the prefix rather than indenting under it keeps every line
+# independently filterable, which is the point of the output.
+record_failures() {
+  local context="$1" summary="$2" file="$3" cause found=0
+  while IFS= read -r cause; do
+    [[ -n "$cause" ]] || continue
+    record_failure "$context" "${summary} - ${cause}"
+    found=1
+  done < <(error_lines "$file")
+  # An empty or unreadable log still has to produce a reason.
+  (( found )) || record_failure "$context" "$summary"
+}
+
+# As record_failures, for the output of the last capture() call.
+record_captured_failures() {
+  record_failures "$1" "$2" <(printf '%s\n' "$CAPTURED")
 }
 
 reasons_count() {
@@ -82,7 +163,7 @@ pulumi_login() {
   # surfaces, and the reason has to reach the caller as an output.
   if ! capture pulumi login "$backend"; then
     err "pulumi login failed for ${backend}"
-    record_failure login "pulumi login failed for ${backend} - $(captured_error_line)"
+    record_captured_failures login "pulumi login failed for ${backend}"
     FAILED=1
     finish
   fi
@@ -101,8 +182,8 @@ select_or_init_stack() {
   fi
   err "could not select or create stack '${stack}'"
   printf '%s\n' "$CAPTURED" > "$OUT_FILE" 2>/dev/null || true
-  record_failure "${CURRENT_WORKDIR:-unknown}" \
-    "could not select or create stack '${stack}' - $(captured_error_line)"
+  record_captured_failures "${CURRENT_WORKDIR:-unknown}" \
+    "could not select or create stack '${stack}'"
   return 1
 }
 

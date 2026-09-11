@@ -242,7 +242,7 @@ new_sandbox() {
 
   unset STUB_FAIL_CMDS STUB_FAIL_IN_DIR STUB_NO_STACK STUB_FAIL_INIT \
         STUB_DRIFT STUB_DRIFT_IN_DIR STUB_PREVIEW_MARKER STUB_PREVIEW_EXTRA \
-        STUB_LOGIN_ERROR
+        STUB_LOGIN_ERROR STUB_WRAPPED_ERROR STUB_BARE_ERROR
 }
 
 # Creates the dirs and points WORKDIRS at them.
@@ -274,6 +274,8 @@ run() {
     STUB_PREVIEW_MARKER="${STUB_PREVIEW_MARKER:-}" \
     STUB_PREVIEW_EXTRA="${STUB_PREVIEW_EXTRA:-}" \
     STUB_LOGIN_ERROR="${STUB_LOGIN_ERROR:-}" \
+    STUB_WRAPPED_ERROR="${STUB_WRAPPED_ERROR:-}" \
+    STUB_BARE_ERROR="${STUB_BARE_ERROR:-}" \
     "$ACTION_DIR/$1" 2>&1
   )"
   STATUS=$?
@@ -630,6 +632,153 @@ test_error_message_reports_preview_failure() {
   assert_error_message 1 "pulumi preview failed" "simulated preview failure"
 }
 
+# Pulumi's real failure shape, and the one the old first-'error:'-line rule got wrong:
+# the cause is under a generic wrapper, so quoting the wrapper says only that a preview
+# failed, which the caller already knew from 'status'.
+test_error_message_skips_the_wrapper_for_the_real_cause() {
+  STUB_FAIL_CMDS="preview"
+  STUB_WRAPPED_ERROR="error configuring Terraform AWS Provider: AccessDenied: not authorized to perform: sts:AssumeRole"
+  run plan.sh
+  assert_status 1
+  assert_error_message 1 "error configuring Terraform AWS Provider" "sts:AssumeRole"
+  assert_error_message_lacks "Preview failed: 1 error occurred"
+  # Still readable in full where the wrapper and the rest of the diagnostic live.
+  assert_file_contains "plan.out" "Preview failed: 1 error occurred"
+}
+
+# Same wrapper, but the cause does not start with 'error' - it is just the first line
+# underneath. Pulumi's bridged providers word it either way.
+test_error_message_reports_a_cause_that_is_not_an_error_line() {
+  STUB_FAIL_CMDS="preview"
+  STUB_WRAPPED_ERROR="AccessDenied: User: arn:aws:sts::123456789012:assumed-role/gha is not authorized"
+  run plan.sh
+  assert_status 1
+  assert_error_message 1 "AccessDenied: User:" "is not authorized"
+  assert_error_message_lacks "Preview failed"
+}
+
+# Two things at once, both of which the old rule got wrong: a capital 'Error:' cause was
+# not matched at all, and the trailing 'error: <op> failed' summary is a wrapper too, so
+# it must not win by being the only lowercase error line in the log.
+test_error_message_skips_the_trailing_summary_wrapper() {
+  UPDATE_STATE="true"
+  STUB_FAIL_CMDS="refresh"
+  STUB_BARE_ERROR="Error: operation error STS: AssumeRole, https response error StatusCode: 403"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "operation error STS: AssumeRole" "403"
+}
+
+# A guard on the ordinary case, not a wrapper case: a single specific 'error:' line must
+# still be picked over the trailing lines of the resource listing.
+test_error_message_still_reports_a_flat_error_line() {
+  STUB_FAIL_CMDS="preview"
+  STUB_PREVIEW_EXTRA="+ aws:s3:Bucket other create"
+  run plan.sh
+  assert_status 1
+  assert_error_message 1 "simulated preview failure"
+  assert_error_message_lacks "1 to create"
+}
+
+# The two fallback tiers are hard to reach through the scripts - every pulumi failure the
+# stub can produce has a usable line - so error_lines is exercised directly here. Sourced
+# in a subshell because common.sh declares readonly globals.
+test_error_lines_falls_back_when_there_is_no_specific_cause() {
+  local out
+  error_line_of() {
+    ( TMPDIR="$SANDBOX" source "$ACTION_DIR/common.sh" >/dev/null 2>&1
+      error_lines "$1" )
+  }
+
+  # Tier 3: nothing but wrappers. Thin, but better than a resource count.
+  printf 'Previewing update (main):\n    + aws:s3:Bucket example create\nerror: preview failed\n' \
+    > "$SANDBOX/wrappers.log"
+  out="$(error_line_of "$SANDBOX/wrappers.log")"
+  [[ "$out" == "error: preview failed" ]] \
+    || fail_assert "wrapper-only log should yield the wrapper, got '${out}'"
+
+  # Tier 4: no error line at all, so the last non-blank line stands in.
+  printf 'Updating (main):\nsomething went sideways\n\n' > "$SANDBOX/none.log"
+  out="$(error_line_of "$SANDBOX/none.log")"
+  [[ "$out" == "something went sideways" ]] \
+    || fail_assert "log with no error line should yield its last line, got '${out}'"
+
+  # An empty log must yield nothing rather than a stray blank reason.
+  : > "$SANDBOX/empty.log"
+  out="$(error_line_of "$SANDBOX/empty.log")"
+  [[ -z "$out" ]] || fail_assert "empty log should yield nothing, got '${out}'"
+
+  # A pulumi diff leads every line with '+', '-' or '~'. None of those are bullets, or a
+  # failing preview would report deleted resources as causes.
+  printf 'error: Preview failed: 1 error occurred:\n    \t* error creating Bucket: denied\nResources:\n    - aws:s3:Bucket old delete\n    + aws:s3:Bucket new create\n' \
+    > "$SANDBOX/diff.log"
+  out="$(error_line_of "$SANDBOX/diff.log")"
+  [[ "$out" == "error creating Bucket: denied" ]] \
+    || fail_assert "diff lines should not be read as causes, got '${out}'"
+}
+
+# The whole point of reporting every cause: a stack that broke in three places must not
+# read as though one thing went wrong.
+test_error_message_reports_every_cause_under_one_wrapper() {
+  workdirs prd
+  STUB_FAIL_CMDS="up"
+  STUB_WRAPPED_ERROR="error creating S3 Bucket: BucketAlreadyExists|error creating IAM Role: EntityAlreadyExists|error creating KMS Key: AccessDenied"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 3 "BucketAlreadyExists" "EntityAlreadyExists" "AccessDenied"
+  # Every line carries its own prefix, so filtering by workdir still finds all three.
+  local count
+  count="$(outputs_block error-message | grep -c '^prd: pulumi up failed - ')"
+  (( count == 3 )) || fail_assert "expected 3 lines matching '^prd:', got ${count}"
+  assert_error_message_lacks "3 errors occurred"
+}
+
+# Causes from different workdirs stay distinguishable, which is what the prefix is for.
+test_error_message_keeps_causes_attributed_per_workdir() {
+  workdirs dev prd
+  STUB_FAIL_CMDS="up"
+  STUB_FAIL_IN_DIR="prd"
+  STUB_WRAPPED_ERROR="error creating Bucket: denied|error creating Role: denied"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 2 "prd: pulumi up failed - error creating Bucket: denied"
+  assert_error_message_lacks "dev:"
+}
+
+# Unbounded pulumi output must not become an unbounded job output.
+test_error_message_caps_the_cause_list() {
+  local causes="" i
+  for (( i = 1; i <= 14; i++ )); do
+    causes="${causes:+${causes}|}error creating Bucket ${i}: denied"
+  done
+  STUB_FAIL_CMDS="up"
+  STUB_WRAPPED_ERROR="$causes"
+  run deploy.sh
+  assert_status 1
+  # 10 causes plus the line saying how many were withheld.
+  assert_error_message 11 "error creating Bucket 1: denied" "error creating Bucket 10: denied" \
+    "... and 4 more (see the log)"
+  assert_error_message_lacks "Bucket 11: denied"
+  # Withheld from the output, not lost: the log still has all 14.
+  assert_file_contains "deploy.out" "Bucket 14: denied"
+}
+
+# Indentation and bullets are trimmed, so the reason reads as one sentence rather than
+# 'stg: pulumi preview failed -     \t* error ...'.
+test_error_message_is_not_indented() {
+  STUB_FAIL_CMDS="preview"
+  STUB_WRAPPED_ERROR="error configuring provider: no credentials"
+  run plan.sh
+  assert_status 1
+  local line
+  while IFS= read -r line; do
+    case "$line" in
+      *"- "[[:space:]]*|*$'\t'*|*"- *"*)
+        fail_assert "error-message keeps the log's indentation: '${line}'" ;;
+    esac
+  done < <(outputs_block error-message)
+}
+
 test_error_message_names_each_failed_workdir() {
   workdirs dev stg prd
   STUB_FAIL_CMDS="up"
@@ -863,6 +1012,15 @@ TESTS=(
   error_message_reports_stack_failure
   error_message_reports_refresh_failure
   error_message_reports_preview_failure
+  error_message_skips_the_wrapper_for_the_real_cause
+  error_message_reports_a_cause_that_is_not_an_error_line
+  error_message_skips_the_trailing_summary_wrapper
+  error_message_still_reports_a_flat_error_line
+  error_lines_falls_back_when_there_is_no_specific_cause
+  error_message_reports_every_cause_under_one_wrapper
+  error_message_keeps_causes_attributed_per_workdir
+  error_message_caps_the_cause_list
+  error_message_is_not_indented
   error_message_names_each_failed_workdir
   error_message_only_names_the_workdir_that_failed
   error_message_reports_no_valid_workdirs

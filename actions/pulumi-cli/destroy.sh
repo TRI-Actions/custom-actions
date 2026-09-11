@@ -24,7 +24,7 @@ destroy_one() {
 
   if ! pulumi destroy --yes --non-interactive --color=never 2>&1 | tee "$OUT_FILE"; then
     err "pulumi destroy failed for ${dir}; see ${dir}/${OUT_FILE}"
-    record_failure "$dir" "pulumi destroy failed - $(error_line "$OUT_FILE")"
+    record_failures "$dir" "pulumi destroy failed" "$OUT_FILE"
     return 1
   fi
 

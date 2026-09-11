@@ -66,14 +66,14 @@ plan_one() {
     # the preview below overwrites it, which is what we want in the plan output.
     if ! pulumi refresh --yes 2>&1 | tee "$OUT_FILE"; then
       err "pulumi refresh failed for ${dir}"
-      record_failure "$dir" "pulumi refresh failed - $(error_line "$OUT_FILE")"
+      record_failures "$dir" "pulumi refresh failed" "$OUT_FILE"
       return 1
     fi
   fi
 
   if ! pulumi preview --color=never --diff --non-interactive 2>&1 | tee "$OUT_FILE"; then
     err "pulumi preview failed for ${dir}; see ${dir}/${OUT_FILE}"
-    record_failure "$dir" "pulumi preview failed - $(error_line "$OUT_FILE")"
+    record_failures "$dir" "pulumi preview failed" "$OUT_FILE"
     mark_plan_failed
     return 1
   fi
