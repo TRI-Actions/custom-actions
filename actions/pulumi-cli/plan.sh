@@ -62,14 +62,18 @@ plan_one() {
   select_or_init_stack main || return 1
 
   if [[ "$drift_check" == "true" ]]; then
-    if ! pulumi refresh --yes; then
+    # Teed into OUT_FILE so a refresh failure still leaves a log to read. On success
+    # the preview below overwrites it, which is what we want in the plan output.
+    if ! pulumi refresh --yes 2>&1 | tee "$OUT_FILE"; then
       err "pulumi refresh failed for ${dir}"
+      record_failure "$dir" "pulumi refresh failed - $(error_line "$OUT_FILE")"
       return 1
     fi
   fi
 
   if ! pulumi preview --color=never --diff --non-interactive 2>&1 | tee "$OUT_FILE"; then
     err "pulumi preview failed for ${dir}; see ${dir}/${OUT_FILE}"
+    record_failure "$dir" "pulumi preview failed - $(error_line "$OUT_FILE")"
     mark_plan_failed
     return 1
   fi
@@ -96,22 +100,39 @@ plan_one() {
 }
 
 # Read back from each drift.out rather than a variable, because plan_one runs in
-# a subshell and cannot mutate this shell. DRIFTED wins.
+# a subshell and cannot mutate this shell.
 set_drift_status_output() {
-  local status="IN-SYNC" d
+  local status="IN-SYNC" undetermined=0 d
+
   for d in ${WORKDIRS:-}; do
     [[ -d "$d" ]] || continue
-    if [[ -f "${d}/${DRIFT_FILE}" ]] && grep -qxF 'DRIFTED' "${d}/${DRIFT_FILE}"; then
-      status="DRIFTED"
-      break
+    if [[ -f "${d}/${DRIFT_FILE}" ]]; then
+      if grep -qxF 'DRIFTED' "${d}/${DRIFT_FILE}"; then
+        status="DRIFTED"
+        break
+      fi
+    else
+      # Attempted but never got far enough to reach a verdict.
+      undetermined=1
     fi
   done
+
+  # DRIFTED is a positive finding, so it stands even if another workdir failed.
+  # Short of that, a workdir we could not inspect leaves us no basis to claim
+  # IN-SYNC, so say so rather than implying a clean bill of health.
+  if [[ "$status" != "DRIFTED" ]] && (( undetermined != 0 || FAILED != 0 )); then
+    status="UNKNOWN"
+  fi
 
   log "drift-status=${status}"
   add_output drift-status "$status"
 }
 
 main() {
+  # Registered before anything can fail, so the output is present even if we exit
+  # during login. Refined by set_drift_status_output once the plans have run.
+  add_output drift-status UNKNOWN
+
   pulumi_login
   for_each_workdir plan plan_one
   set_drift_status_output

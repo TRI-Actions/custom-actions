@@ -24,6 +24,9 @@ outputs:
   failed-workdirs:
     description: 'Space-separated workdirs that failed. Empty on success.'
     value: ${{ steps.result.outputs.failed-workdirs }}
+  error-message:
+    description: 'Why the run failed, one line per cause. Empty on success.'
+    value: ${{ steps.result.outputs.error-message }}
   drift-status:
     description: "'DRIFTED' if any workdir has drifted, otherwise 'IN-SYNC'. Only set by the plan action."
     value: ${{ steps.result.outputs.drift-status }}
@@ -75,5 +78,12 @@ runs:
           # Removed so a later use of this action in the same job cannot read it back.
           rm -f "$OUTPUTS_FILE"
         else
-          printf 'status=failure\n' >> "$GITHUB_OUTPUT"
+          # The script was killed before it could report; still say something useful.
+          {
+            printf 'status=failure\n'
+            printf 'drift-status=UNKNOWN\n'
+            printf 'error-message<<PULUMI_CLI_EOF\n'
+            printf 'the pulumi step exited without writing its outputs; see the step log\n'
+            printf 'PULUMI_CLI_EOF\n'
+          } >> "$GITHUB_OUTPUT"
         fi

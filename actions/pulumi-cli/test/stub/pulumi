@@ -15,6 +15,8 @@
 #   STUB_DRIFT_IN_DIR     restrict STUB_DRIFT to the workdir with this basename
 #   STUB_PREVIEW_MARKER   'none' omits the "Pulumi used the selected providers" line
 #   STUB_PREVIEW_EXTRA    an extra line injected into preview output
+#   STUB_LOGIN_ERROR      text for a realistic 'pulumi login' failure, e.g. an
+#                         unassumable role. Implies login fails.
 set -uo pipefail
 
 cmd="${1:-}"
@@ -59,6 +61,13 @@ should_drift() {
 # survive a failed run.
 case "$key" in
   login)
+    if [[ -n "${STUB_LOGIN_ERROR:-}" ]]; then
+      # Two lines, so tests prove the 'error:' line is picked over the last line.
+      echo "warning: could not read the state bucket" >&2
+      echo "error: ${STUB_LOGIN_ERROR}" >&2
+      echo "note: run 'pulumi login --help' for more information" >&2
+      exit 255
+    fi
     echo "Logged in to stub-backend as tester"
     ;;
   stack-select)

@@ -25,6 +25,7 @@ deploy_one() {
   # Truncated once here so refresh and up can both append below.
   if ! : > "$OUT_FILE"; then
     err "cannot write ${dir}/${OUT_FILE}"
+    record_failure "$dir" "cannot write ${dir}/${OUT_FILE}"
     return 1
   fi
 
@@ -34,12 +35,14 @@ deploy_one() {
     log "updating state for ${dir}"
     if ! pulumi refresh "${options[@]}" 2>&1 | tee -a "$OUT_FILE"; then
       err "pulumi refresh failed for ${dir}; not running 'pulumi up'"
+      record_failure "$dir" "pulumi refresh failed, 'pulumi up' not attempted - $(error_line "$OUT_FILE")"
       return 1
     fi
   fi
 
   if ! pulumi up "${options[@]}" 2>&1 | tee -a "$OUT_FILE"; then
     err "pulumi up failed for ${dir}; see ${dir}/${OUT_FILE}"
+    record_failure "$dir" "pulumi up failed - $(error_line "$OUT_FILE")"
     return 1
   fi
 

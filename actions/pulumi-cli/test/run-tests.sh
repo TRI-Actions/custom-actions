@@ -116,21 +116,37 @@ assert_first_line() {
   esac
 }
 
+# Prints the body of a '<key><<DELIM' heredoc block from the outputs file. The
+# delimiter is read off the header line rather than assumed, so this parses the file
+# the same way GitHub does. Returns 1 if the block is missing or unterminated.
+outputs_block() {
+  awk -v key="$1" '
+    index($0, key "<<") == 1 {
+      delim = substr($0, length(key) + 3)
+      inblock = 1
+      next
+    }
+    inblock && $0 == delim { inblock = 0; closed = 1; next }
+    inblock                { print }
+    END                    { exit(closed ? 0 : 1) }
+  ' "$OUTPUTS_FILE" 2>/dev/null
+}
+
+# Prints the delimiter used for <key>'s block.
+outputs_delimiter() {
+  awk -v key="$1" 'index($0, key "<<") == 1 { print substr($0, length(key) + 3); exit }' \
+    "$OUTPUTS_FILE" 2>/dev/null
+}
+
 # assert_output_files <expected_count> [expected_path...]
-# Validates the 'output-files<<EOF' heredoc block: it must be terminated, hold exactly
-# <expected_count> lines, and every line must be an absolute path. GitHub's
-# $GITHUB_OUTPUT parser silently mangles an unterminated or blank-padded block.
+# The block must be terminated, hold exactly <expected_count> lines, and every line
+# must be an absolute path that exists.
 assert_output_files() {
   local expected_count="$1"; shift
   local block count line
 
-  if ! block="$(awk '
-      /^output-files<<EOF$/ { inblock = 1; next }
-      inblock && /^EOF$/    { inblock = 0; closed = 1; next }
-      inblock               { print }
-      END                   { exit(closed ? 0 : 1) }
-    ' "$OUTPUTS_FILE" 2>/dev/null)"; then
-    fail_assert "outputs file has no terminated 'output-files<<EOF' block"
+  if ! block="$(outputs_block output-files)"; then
+    fail_assert "outputs file has no terminated 'output-files' block"
     return
   fi
 
@@ -160,6 +176,46 @@ assert_output_files() {
   done
 }
 
+# assert_error_message <expected_line_count> [expected_substring...]
+# The 'error-message' block must always be present and terminated; pass 0 to require
+# it be empty.
+assert_error_message() {
+  local expected_count="$1"; shift
+  local block count text
+
+  if ! block="$(outputs_block error-message)"; then
+    fail_assert "outputs file has no terminated 'error-message' block"
+    return
+  fi
+
+  if [[ -z "$block" ]]; then
+    count=0
+  else
+    count="$(printf '%s\n' "$block" | wc -l | tr -d ' ')"
+  fi
+
+  if [[ "$count" != "$expected_count" ]]; then
+    fail_assert "expected ${expected_count} error-message line(s), got ${count}: $(printf '%s' "$block" | tr '\n' '/')"
+  fi
+
+  for text in "$@"; do
+    case "$block" in
+      *"$text"*) ;;
+      *) fail_assert "error-message should mention '$text' (got: $(printf '%s' "$block" | tr '\n' '/'))" ;;
+    esac
+  done
+}
+
+assert_error_message_lacks() {
+  local block text
+  block="$(outputs_block error-message)" || return 0
+  for text in "$@"; do
+    case "$block" in
+      *"$text"*) fail_assert "error-message should NOT mention '$text'" ;;
+    esac
+  done
+}
+
 # The stub logs one line per pulumi call, so these assert on what was invoked.
 assert_ran() { assert_file_contains "$STUB_LOG" "$1"; }
 assert_never_ran() { assert_file_lacks "$STUB_LOG" "$1"; }
@@ -185,7 +241,8 @@ new_sandbox() {
   DRIFT_CHECK="false"
 
   unset STUB_FAIL_CMDS STUB_FAIL_IN_DIR STUB_NO_STACK STUB_FAIL_INIT \
-        STUB_DRIFT STUB_DRIFT_IN_DIR STUB_PREVIEW_MARKER STUB_PREVIEW_EXTRA
+        STUB_DRIFT STUB_DRIFT_IN_DIR STUB_PREVIEW_MARKER STUB_PREVIEW_EXTRA \
+        STUB_LOGIN_ERROR
 }
 
 # Creates the dirs and points WORKDIRS at them.
@@ -216,6 +273,7 @@ run() {
     STUB_DRIFT_IN_DIR="${STUB_DRIFT_IN_DIR:-}" \
     STUB_PREVIEW_MARKER="${STUB_PREVIEW_MARKER:-}" \
     STUB_PREVIEW_EXTRA="${STUB_PREVIEW_EXTRA:-}" \
+    STUB_LOGIN_ERROR="${STUB_LOGIN_ERROR:-}" \
     "$ACTION_DIR/$1" 2>&1
   )"
   STATUS=$?
@@ -531,6 +589,233 @@ test_outputs_are_not_written_to_github_output_directly() {
   assert_file_has_line "$OUTPUTS_FILE" "drift-status=DRIFTED"
 }
 
+test_error_message_is_empty_on_success() {
+  run deploy.sh
+  assert_status 0
+  # Present but empty, so a consumer can read it unconditionally.
+  assert_error_message 0
+}
+
+test_error_message_reports_unassumable_role() {
+  STUB_LOGIN_ERROR="unable to assume role arn:aws:iam::123456789012:role/deploy: AccessDenied"
+  run deploy.sh
+  assert_status 1
+  assert_file_has_line "$OUTPUTS_FILE" "status=failure"
+  assert_error_message 1 "login:" "unable to assume role" "AccessDenied"
+  # The 'error:' line must win over the trailing 'note:' line.
+  assert_error_message_lacks "run 'pulumi login --help'"
+}
+
+test_error_message_reports_stack_failure() {
+  workdirs dev
+  STUB_NO_STACK=1
+  STUB_FAIL_INIT=1
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "dev:" "could not select or create stack 'main'"
+}
+
+test_error_message_reports_refresh_failure() {
+  UPDATE_STATE="true"
+  STUB_FAIL_CMDS="refresh"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "pulumi refresh failed" "'pulumi up' not attempted"
+}
+
+test_error_message_reports_preview_failure() {
+  STUB_FAIL_CMDS="preview"
+  run plan.sh
+  assert_status 1
+  assert_error_message 1 "pulumi preview failed" "simulated preview failure"
+}
+
+test_error_message_names_each_failed_workdir() {
+  workdirs dev stg prd
+  STUB_FAIL_CMDS="up"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 3 "dev:" "stg:" "prd:"
+}
+
+test_error_message_only_names_the_workdir_that_failed() {
+  workdirs dev stg
+  STUB_FAIL_CMDS="up"
+  STUB_FAIL_IN_DIR="stg"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "stg:"
+  assert_error_message_lacks "dev:"
+}
+
+test_error_message_reports_no_valid_workdirs() {
+  WORKDIRS="nope1 nope2"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "workdirs:" "nope1 nope2"
+}
+
+test_error_message_reports_malformed_repository() {
+  OUTPUTS_FILE="$SANDBOX/outputs.txt"
+  OUTPUT="$(
+    cd "$SANDBOX" || exit 99
+    PATH="$SANDBOX/bin:$PATH" GITHUB_REPOSITORY="" OUTPUTS_FILE="$OUTPUTS_FILE" \
+    WORKDIRS="." STUB_LOG="$STUB_LOG" "$ACTION_DIR/deploy.sh" 2>&1
+  )"
+  STATUS=$?
+  assert_status 1
+  assert_error_message 1 "login:" "GITHUB_REPOSITORY is unset or malformed"
+  assert_never_ran "login"
+}
+
+test_error_message_is_echoed_to_the_step_log() {
+  STUB_FAIL_CMDS="up"
+  run deploy.sh
+  assert_status 1
+  assert_out_contains "failure details:"
+  assert_out_contains "pulumi up failed"
+}
+
+test_stack_failure_still_writes_a_log_file() {
+  workdirs dev
+  STUB_NO_STACK=1
+  STUB_FAIL_INIT=1
+  run deploy.sh
+  assert_status 1
+  # The workdir never reached 'pulumi up', but the stack error is still readable.
+  assert_file_contains "dev/deploy.out" "could not create stack 'main'"
+  assert_output_files 1 "$SANDBOX/dev/deploy.out"
+}
+
+test_plan_refresh_failure_still_writes_plan_out() {
+  DRIFT_CHECK="true"
+  STUB_FAIL_CMDS="refresh"
+  run plan.sh
+  assert_status 1
+  assert_file_contains "plan.out" "simulated refresh failure"
+  assert_output_files 1 "$SANDBOX/plan.out"
+}
+
+test_plan_successful_refresh_does_not_leak_into_plan_out() {
+  DRIFT_CHECK="true"
+  run plan.sh
+  assert_status 0
+  # The preview overwrites the refresh log, so the plan output stays clean.
+  assert_file_lacks "plan.out" "STUB-REFRESH-OUTPUT"
+  assert_file_contains "plan.out" "aws:s3:Bucket example create"
+}
+
+test_delimiter_is_namespaced() {
+  run deploy.sh
+  assert_status 0
+  local delim
+  delim="$(outputs_delimiter output-files)"
+  if [[ "$delim" != "PULUMI_CLI_EOF" ]]; then
+    fail_assert "expected a namespaced delimiter, got '${delim}'"
+  fi
+  # Both blocks must agree, or one of them is unparseable.
+  if [[ "$(outputs_delimiter error-message)" != "$delim" ]]; then
+    fail_assert "output-files and error-message use different delimiters"
+  fi
+}
+
+test_no_value_line_equals_the_delimiter() {
+  STUB_LOGIN_ERROR="unexpected EOF while reading the state file"
+  run deploy.sh
+  assert_status 1
+  local delim
+  delim="$(outputs_delimiter error-message)"
+  if outputs_block error-message | grep -qxF "$delim"; then
+    fail_assert "a value line equals the delimiter '${delim}'"
+  fi
+  # Pulumi text mentioning EOF survives verbatim.
+  assert_error_message 1 "unexpected EOF while reading the state file"
+}
+
+# This is what actually makes the blocks safe, so pin it: a fixed delimiter is only
+# sound while no value line can equal it. Every error-message line is one line
+# prefixed with its context, so none can be a bare delimiter or an injected key.
+test_every_error_message_line_is_context_prefixed() {
+  workdirs dev stg
+  STUB_FAIL_CMDS="up"
+  run deploy.sh
+  assert_status 1
+
+  local line count=0
+  while IFS= read -r line; do
+    count=$((count + 1))
+    if [[ -z "$line" ]]; then
+      fail_assert "error-message has a blank line"
+      continue
+    fi
+    case "$line" in
+      *": "*) ;;
+      *) fail_assert "error-message line is not context-prefixed: '${line}'" ;;
+    esac
+  done < <(outputs_block error-message)
+
+  if (( count != 2 )); then
+    fail_assert "expected 2 error-message lines, got ${count}"
+  fi
+}
+
+test_drift_status_is_unknown_when_the_run_fails() {
+  DRIFT_CHECK="true"
+  STUB_FAIL_CMDS="preview"
+  run plan.sh
+  assert_status 1
+  assert_file_has_line "$OUTPUTS_FILE" "drift-status=UNKNOWN"
+  assert_file_lacks "$OUTPUTS_FILE" "drift-status=IN-SYNC"
+}
+
+test_drift_status_is_unknown_when_login_fails() {
+  STUB_LOGIN_ERROR="unable to assume role arn:aws:iam::123456789012:role/deploy"
+  run plan.sh
+  assert_status 1
+  # plan.sh exits during login, so this is the pre-registered default.
+  assert_file_has_line "$OUTPUTS_FILE" "drift-status=UNKNOWN"
+}
+
+test_drift_status_is_unknown_when_no_workdir_is_usable() {
+  WORKDIRS="nope1 nope2"
+  run plan.sh
+  assert_status 1
+  assert_file_has_line "$OUTPUTS_FILE" "drift-status=UNKNOWN"
+}
+
+test_drift_status_is_unknown_for_a_partially_failed_run() {
+  workdirs dev stg
+  DRIFT_CHECK="true"
+  STUB_FAIL_CMDS="preview"
+  STUB_FAIL_IN_DIR="stg"
+  run plan.sh
+  assert_status 1
+  # dev came back IN-SYNC, but stg never reached a verdict, so overall we do not know.
+  assert_file_contains "dev/drift.out" "IN-SYNC"
+  assert_file_has_line "$OUTPUTS_FILE" "drift-status=UNKNOWN"
+}
+
+test_drift_status_drifted_wins_over_a_failed_workdir() {
+  workdirs dev stg
+  DRIFT_CHECK="true"
+  STUB_DRIFT=1
+  STUB_DRIFT_IN_DIR="dev"
+  STUB_FAIL_CMDS="preview"
+  STUB_FAIL_IN_DIR="stg"
+  run plan.sh
+  assert_status 1
+  # Drift in dev is a positive finding; stg failing does not erase it.
+  assert_file_has_line "$OUTPUTS_FILE" "drift-status=DRIFTED"
+}
+
+test_drift_status_stays_in_sync_on_a_clean_run() {
+  workdirs dev stg
+  DRIFT_CHECK="true"
+  run plan.sh
+  assert_status 0
+  assert_file_has_line "$OUTPUTS_FILE" "drift-status=IN-SYNC"
+}
+
 # ---------- driver ----------
 
 TESTS=(
@@ -572,6 +857,31 @@ TESTS=(
   outputs_single_workdir_path_is_not_dot_prefixed
   outputs_nested_workdir_paths_are_resolved
   outputs_are_not_written_to_github_output_directly
+
+  error_message_is_empty_on_success
+  error_message_reports_unassumable_role
+  error_message_reports_stack_failure
+  error_message_reports_refresh_failure
+  error_message_reports_preview_failure
+  error_message_names_each_failed_workdir
+  error_message_only_names_the_workdir_that_failed
+  error_message_reports_no_valid_workdirs
+  error_message_reports_malformed_repository
+  error_message_is_echoed_to_the_step_log
+  stack_failure_still_writes_a_log_file
+  plan_refresh_failure_still_writes_plan_out
+  plan_successful_refresh_does_not_leak_into_plan_out
+
+  delimiter_is_namespaced
+  no_value_line_equals_the_delimiter
+  every_error_message_line_is_context_prefixed
+
+  drift_status_is_unknown_when_the_run_fails
+  drift_status_is_unknown_when_login_fails
+  drift_status_is_unknown_when_no_workdir_is_usable
+  drift_status_is_unknown_for_a_partially_failed_run
+  drift_status_drifted_wins_over_a_failed_workdir
+  drift_status_stays_in_sync_on_a_clean_run
 )
 
 printf 'Running pulumi-cli script tests\n\n'

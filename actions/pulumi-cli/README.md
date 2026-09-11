@@ -39,11 +39,44 @@ Whichever action ran, these outputs are set in the Actions context:
 | `status` | `success` if every workdir succeeded, otherwise `failure`. |
 | `output-files` | Newline-separated absolute paths of the log files, one per workdir that produced one. Includes failed workdirs, so you can read the error. |
 | `failed-workdirs` | Space-separated workdirs that failed, in the same format as the `workdirs` input. Empty on success. |
-| `drift-status` | `DRIFTED` if any workdir has drifted, otherwise `IN-SYNC`. Only set by the `plan` action. |
+| `error-message` | Why the run failed, one line per cause. Empty on success. |
+| `drift-status` | `DRIFTED`, `IN-SYNC` or `UNKNOWN`. Only set by the `plan` action. |
 
 They are set even when the step fails, so a reporting step can consume them - but it must
 say `if: always()`, or it will be skipped on exactly the runs where the output matters
 most.
+
+### `error-message`
+
+Always present, so you can read it unconditionally. It covers failures that happen before
+Pulumi produces any plan output - a role that cannot be assumed, a bad backend, a stack
+that can neither be selected nor created - which are otherwise only visible by reading the
+step log. Each line is prefixed with where it came from: `login`, `workdirs`, or the
+workdir itself.
+
+```
+login: pulumi login failed for s3://tri-pulumi-state-us-east-1/example-infra - error: unable to assume role arn:aws:iam::123456789012:role/deploy: AccessDenied
+```
+
+```
+stg: pulumi refresh failed, 'pulumi up' not attempted - error: 1 error occurred
+prd: pulumi up failed - error: creating S3 Bucket: BucketAlreadyExists
+```
+
+A workdir that fails before its Pulumi operation still gets a log file listed in
+`output-files`, so the detail is readable there too. The only failure with no log file is
+`pulumi login`, which happens before any workdir is entered.
+
+### `drift-status`
+
+| Value | Meaning |
+|---|---|
+| `DRIFTED` | At least one workdir has drifted. A positive finding, so it stands even if another workdir failed. |
+| `IN-SYNC` | Every workdir reached a verdict and none had drifted. |
+| `UNKNOWN` | Drift could not be determined - the run failed, or a workdir never got as far as a verdict. |
+
+`UNKNOWN` matters because the alternative is claiming `IN-SYNC` for a run that never
+looked. Gate on `DRIFTED` rather than on `!= IN-SYNC`, or check `status` first.
 
 ## Example
 
@@ -59,7 +92,10 @@ most.
   run: |
     echo "status: ${{ steps.plan.outputs.status }}"
     echo "drift:  ${{ steps.plan.outputs.drift-status }}"
-    echo "failed: ${{ steps.plan.outputs.failed-workdirs }}"
+    if [ "${{ steps.plan.outputs.status }}" = failure ]; then
+      echo "failed workdirs: ${{ steps.plan.outputs.failed-workdirs }}"
+      echo "${{ steps.plan.outputs.error-message }}"
+    fi
     while read -r file; do
       [ -n "$file" ] && cat "$file"
     done <<< "${{ steps.plan.outputs.output-files }}"
