@@ -102,8 +102,12 @@ error_lines() {
       }
 
       if (!bullet) {
-        # A "<type> (<name>):" line heads the diagnostics for one resource.
-        if (line ~ /^[A-Za-z][A-Za-z0-9_.:\/-]*[[:space:]]+\(.*\):$/) {
+        # A "<type> (<name>):" line heads the diagnostics for one resource. The type has
+        # to contain a ":", as every pulumi type does - "pkg:module:Type". Without that
+        # requirement the phase headings pulumi prints match too, and since deploy.sh
+        # appends refresh and up to one file, "Updating (main):" is always there to be
+        # mistaken for a resource.
+        if (line ~ /^[A-Za-z][A-Za-z0-9_.\/-]*:[A-Za-z0-9_.:\/-]*[[:space:]]+\(.*\):$/) {
           if (line ~ /^pulumi:pulumi:Stack[[:space:]]/) {
             resource = ""
           } else {

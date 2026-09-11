@@ -672,6 +672,19 @@ test_error_message_skips_the_trailing_summary_wrapper() {
   assert_error_message 1 "operation error STS: AssumeRole" "403"
 }
 
+# 'Updating (main):' is a phase heading, not a resource, and it is unavoidable on this path
+# because deploy.sh appends refresh and up to one file. Attributing a cause to it would
+# name a resource that does not exist, which reads as authoritative and is not.
+test_error_message_does_not_attribute_a_cause_to_a_phase_heading() {
+  STUB_FAIL_CMDS="up"
+  STUB_BARE_ERROR="error: creating CodeBuild Project: InvalidInputException: Role is not authorized"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "pulumi up failed - error: creating CodeBuild Project"
+  assert_error_message_lacks "Updating (main)" "Refreshing (main)"
+  assert_file_contains "deploy.out" "Updating (main):"
+}
+
 # A guard on the ordinary case, not a wrapper case: a single specific 'error:' line must
 # still be picked over the trailing lines of the resource listing.
 test_error_message_still_reports_a_flat_error_line() {
@@ -1067,6 +1080,7 @@ TESTS=(
   error_message_skips_the_wrapper_for_the_real_cause
   error_message_reports_a_cause_that_is_not_an_error_line
   error_message_skips_the_trailing_summary_wrapper
+  error_message_does_not_attribute_a_cause_to_a_phase_heading
   error_message_still_reports_a_flat_error_line
   error_lines_falls_back_when_there_is_no_specific_cause
   error_message_reports_every_cause_under_one_wrapper
