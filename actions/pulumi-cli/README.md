@@ -86,12 +86,31 @@ error: Preview failed: 2 errors occurred:
 ```
 
 `error-message` reports the causes and drops the wrapper, which would only repeat what
-`status` and the summary already say:
+`status` and the summary already say. Each cause also names the resource whose diagnostics
+it appeared under, because "creating S3 Bucket failed" does not say *which* of your
+buckets:
 
 ```
-prd: pulumi up failed - error creating S3 Bucket: BucketAlreadyExists
-prd: pulumi up failed - AccessDenied: not authorized to perform: kms:CreateKey
+prd: pulumi up failed - aws:s3:Bucket (access-logs) - error creating S3 Bucket: BucketAlreadyExists
+prd: pulumi up failed - aws:kms:Key (backups) - AccessDenied: not authorized to perform: kms:CreateKey
 ```
+
+A cause Pulumi attributes only to the `pulumi:pulumi:Stack` pseudo-resource is reported
+without a resource, since that name identifies nothing.
+
+Pulumi follows some failures with a canned list of things to check - the unassumable-role
+error is the common one:
+
+```
+error: Preview failed: 1 error occurred:
+    * error configuring Terraform AWS Provider: IAM Role cannot be assumed.
+      There are a number of possible causes of this - the most common are:
+        * The credentials used in order to assume the role are invalid
+        * The role ARN is not valid
+```
+
+Those bullets are suggestions rather than causes, so they are left out; otherwise this one
+failure would fill `error-message` with boilerplate. They stay in the log file.
 
 At most 10 causes are reported per workdir, after which one line says how many were
 withheld. The log file always has all of them, along with anything Pulumi printed

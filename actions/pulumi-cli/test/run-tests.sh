@@ -242,7 +242,8 @@ new_sandbox() {
 
   unset STUB_FAIL_CMDS STUB_FAIL_IN_DIR STUB_NO_STACK STUB_FAIL_INIT \
         STUB_DRIFT STUB_DRIFT_IN_DIR STUB_PREVIEW_MARKER STUB_PREVIEW_EXTRA \
-        STUB_LOGIN_ERROR STUB_WRAPPED_ERROR STUB_BARE_ERROR
+        STUB_LOGIN_ERROR STUB_WRAPPED_ERROR STUB_BARE_ERROR \
+        STUB_ERROR_RESOURCE STUB_ERROR_ADVICE
 }
 
 # Creates the dirs and points WORKDIRS at them.
@@ -276,6 +277,8 @@ run() {
     STUB_LOGIN_ERROR="${STUB_LOGIN_ERROR:-}" \
     STUB_WRAPPED_ERROR="${STUB_WRAPPED_ERROR:-}" \
     STUB_BARE_ERROR="${STUB_BARE_ERROR:-}" \
+    STUB_ERROR_RESOURCE="${STUB_ERROR_RESOURCE:-}" \
+    STUB_ERROR_ADVICE="${STUB_ERROR_ADVICE:-}" \
     "$ACTION_DIR/$1" 2>&1
   )"
   STATUS=$?
@@ -708,6 +711,30 @@ test_error_lines_falls_back_when_there_is_no_specific_cause() {
   out="$(error_line_of "$SANDBOX/empty.log")"
   [[ -z "$out" ]] || fail_assert "empty log should yield nothing, got '${out}'"
 
+  # The AssumeRole failure follows its real cause with pulumi's canned troubleshooting
+  # list. Those bullets are advice, not causes, and it is the most common failure there
+  # is, so the noisiest output would otherwise land on it.
+  printf 'Diagnostics:\n  aws:s3:Bucket (data-logs):\n    error: Preview failed: 1 error occurred:\n    \t* error configuring Terraform AWS Provider: IAM Role cannot be assumed.\n      There are a number of possible causes of this - the most common are:\n        * The credentials used in order to assume the role are invalid\n        * The credentials do not have appropriate permission to assume the role\n        * The role ARN is not valid\n\nerror: update failed\n' \
+    > "$SANDBOX/advice.log"
+  out="$(error_line_of "$SANDBOX/advice.log")"
+  [[ "$out" == "aws:s3:Bucket (data-logs) - error configuring Terraform AWS Provider: IAM Role cannot be assumed." ]] \
+    || fail_assert "advice bullets should not be causes, got '${out}'"
+
+  # The converse: only a line ending in ':' closes the cause list, so a cause that wraps
+  # onto a second line must not hide the cause after it.
+  printf 'error: Preview failed: 2 errors occurred:\n    \t* error creating Bucket: denied\n      status code: 403, request id: abc-123\n    \t* AccessDenied: not authorized to perform: kms:CreateKey\n\nerror: update failed\n' \
+    > "$SANDBOX/cont.log"
+  out="$(error_line_of "$SANDBOX/cont.log" | tr '\n' '/')"
+  [[ "$out" == "error creating Bucket: denied/AccessDenied: not authorized to perform: kms:CreateKey/" ]] \
+    || fail_assert "a wrapped cause should not hide the next one, got '${out}'"
+
+  # The stack pseudo-resource names nothing useful, so it is not prefixed onto a cause.
+  printf 'Diagnostics:\n  pulumi:pulumi:Stack (example-dev):\n    error: Preview failed: 1 error occurred:\n    \t* error creating Bucket: denied\n' \
+    > "$SANDBOX/stackres.log"
+  out="$(error_line_of "$SANDBOX/stackres.log")"
+  [[ "$out" == "error creating Bucket: denied" ]] \
+    || fail_assert "the stack pseudo-resource should not be attributed, got '${out}'"
+
   # A pulumi diff leads every line with '+', '-' or '~'. None of those are bullets, or a
   # failing preview would report deleted resources as causes.
   printf 'error: Preview failed: 1 error occurred:\n    \t* error creating Bucket: denied\nResources:\n    - aws:s3:Bucket old delete\n    + aws:s3:Bucket new create\n' \
@@ -743,6 +770,31 @@ test_error_message_keeps_causes_attributed_per_workdir() {
   assert_status 1
   assert_error_message 2 "prd: pulumi up failed - error creating Bucket: denied"
   assert_error_message_lacks "dev:"
+}
+
+# Which resource failed, end to end - the causes name a bucket, not which of your buckets.
+test_error_message_names_the_failing_resource() {
+  workdirs prd
+  STUB_FAIL_CMDS="up"
+  STUB_ERROR_RESOURCE="aws:s3:Bucket (data-logs)"
+  STUB_WRAPPED_ERROR="error creating S3 Bucket: BucketAlreadyExists"
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 \
+    "prd: pulumi up failed - aws:s3:Bucket (data-logs) - error creating S3 Bucket: BucketAlreadyExists"
+}
+
+# End to end on the AssumeRole shape: the cause survives, the canned advice does not.
+test_error_message_drops_pulumis_troubleshooting_advice() {
+  STUB_FAIL_CMDS="up"
+  STUB_ERROR_ADVICE=1
+  STUB_WRAPPED_ERROR="error configuring Terraform AWS Provider: IAM Role cannot be assumed."
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "IAM Role cannot be assumed"
+  assert_error_message_lacks "possible causes of this" "credentials used in order to assume"
+  # Dropped from the output, not from the log a human reads.
+  assert_file_contains "deploy.out" "The role ARN is not valid"
 }
 
 # Unbounded pulumi output must not become an unbounded job output.
@@ -1019,6 +1071,8 @@ TESTS=(
   error_lines_falls_back_when_there_is_no_specific_cause
   error_message_reports_every_cause_under_one_wrapper
   error_message_keeps_causes_attributed_per_workdir
+  error_message_names_the_failing_resource
+  error_message_drops_pulumis_troubleshooting_advice
   error_message_caps_the_cause_list
   error_message_is_not_indented
   error_message_names_each_failed_workdir

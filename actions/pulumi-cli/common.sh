@@ -49,11 +49,24 @@ record_failure() {
 # indented bullet each. Quoting the wrapper says only what 'status' already said, and
 # quoting one bullet understates a stack that broke in several places, so wrappers are
 # skipped and every cause is reported. In preference order:
-#   1. every non-wrapper error line, and every bullet under a wrapper. Bullets count
-#      whatever their wording, which catches causes that do not start with 'error'
-#      ('* AccessDenied: User ... is not authorized to perform: sts:AssumeRole').
+#   1. every non-wrapper error line, and every bullet belonging to a wrapper's list.
+#      Bullets count whatever their wording, which catches causes that do not start
+#      with 'error' ('* AccessDenied: User ... is not authorized to perform: sts:...').
 #   2. the first line under a wrapper, for a wrapper that bullets nothing
 #   3. the wrapper itself, then the last non-blank line
+#
+# A line ending in ':' opens a bulleted list, and bullets belong to whichever list
+# opened last. That is what separates causes from advice: the AssumeRole failure - the
+# most common one there is - follows its real cause with pulumi's canned
+#   There are a number of possible causes of this - the most common are:
+#     * The credentials used in order to assume the role are invalid
+#     * ...
+# whose bullets are suggestions, not causes. Only ending in ':' opens a list, so a
+# cause that merely wraps onto a second line ('status code: 403, request id: ...')
+# leaves the wrapper's list open and any later cause is still collected.
+#
+# Causes are attributed to the resource whose diagnostics block they appear in, except
+# for the 'pulumi:pulumi:Stack' pseudo-resource, which names nothing useful.
 # Indentation and bullets are trimmed, because each line is quoted inline in a reason.
 error_lines() {
   awk -v max="$MAX_CAUSES" '
@@ -84,14 +97,32 @@ error_lines() {
                        lower ~ /^error:[[:space:]]+(preview|update|refresh|destroy|import) failed/)) {
         if (wrapper == "") wrapper = line
         seen_wrapper = 1
+        list = "cause"
         next
       }
 
-      # A bullet only counts once a wrapper has introduced its list, so a stray "*" in
-      # the body of a plan cannot be mistaken for a cause.
-      if (is_error || (bullet && seen_wrapper)) {
+      if (!bullet) {
+        # A "<type> (<name>):" line heads the diagnostics for one resource.
+        if (line ~ /^[A-Za-z][A-Za-z0-9_.:\/-]*[[:space:]]+\(.*\):$/) {
+          if (line ~ /^pulumi:pulumi:Stack[[:space:]]/) {
+            resource = ""
+          } else {
+            resource = line
+            sub(/:$/, "", resource)
+          }
+          next
+        }
+        # Any other prose ending in ":" opens a list of its own, so its bullets stop
+        # counting as causes of the wrapper above.
+        if (!is_error && line ~ /:$/) {
+          list = "other"
+          next
+        }
+      }
+
+      if (is_error || (bullet && list == "cause")) {
         n++
-        if (n <= max) cause[n] = line
+        if (n <= max) { cause[n] = line; res[n] = resource }
         next
       }
 
@@ -99,7 +130,10 @@ error_lines() {
     }
     END {
       if (n > 0) {
-        for (i = 1; i <= n && i <= max; i++) print cause[i]
+        for (i = 1; i <= n && i <= max; i++) {
+          if (res[i] != "") printf "%s - %s\n", res[i], cause[i]
+          else             print cause[i]
+        }
         if (n > max) printf "... and %d more (see the log)\n", n - max
       }
       else if (after != "")   print after

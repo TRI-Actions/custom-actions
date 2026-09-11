@@ -24,6 +24,10 @@
 #                         '|'-separated for several causes under the one wrapper.
 #   STUB_BARE_ERROR       like STUB_WRAPPED_ERROR but with no wrapper above the cause,
 #                         only the trailing 'error: <cmd> failed' summary below it
+#   STUB_ERROR_RESOURCE   resource heading the diagnostics block, e.g.
+#                         'aws:s3:Bucket (logs)'. Defaults to the stack pseudo-resource.
+#   STUB_ERROR_ADVICE     append pulumi's canned bulleted troubleshooting list under the
+#                         cause, as the AssumeRole failure does
 set -uo pipefail
 
 cmd="${1:-}"
@@ -135,7 +139,7 @@ if should_fail; then
     IFS='|' read -r -a causes <<< "${STUB_WRAPPED_ERROR}"
     {
       echo "Diagnostics:"
-      echo "  pulumi:pulumi:Stack (example-main):"
+      echo "  ${STUB_ERROR_RESOURCE:-pulumi:pulumi:Stack (example-main)}:"
       if (( ${#causes[@]} == 1 )); then
         echo "    error: Preview failed: 1 error occurred:"
       else
@@ -143,6 +147,11 @@ if should_fail; then
       fi
       for cause in "${causes[@]}"; do
         printf '    \t* %s\n' "$cause"
+        if [[ -n "${STUB_ERROR_ADVICE:-}" ]]; then
+          echo "      There are a number of possible causes of this - the most common are:"
+          echo "        * The credentials used in order to assume the role are invalid"
+          echo "        * The role ARN is not valid"
+        fi
       done
       echo ""
       echo "error: ${phase} failed"
