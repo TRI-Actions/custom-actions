@@ -14,6 +14,26 @@ inputs:
     description: whether we update the state or not
     default: 'false'
 
+outputs:
+  status:
+    description: "'success' if every workdir succeeded, otherwise 'failure'."
+    value: ${{ steps.result.outputs.status }}
+  output-files:
+    description: 'Newline-separated absolute paths of the per-workdir log files.'
+    value: ${{ steps.result.outputs.output-files }}
+  failed-workdirs:
+    description: 'Space-separated workdirs that failed. Empty on success.'
+    value: ${{ steps.result.outputs.failed-workdirs }}
+  error-message:
+    description: 'Why the run failed, one line per cause. Empty on success.'
+    value: ${{ steps.result.outputs.error-message }}
+  drift-status:
+    description: "'DRIFTED' if any workdir has drifted, otherwise 'IN-SYNC'. Only set by the plan action."
+    value: ${{ steps.result.outputs.drift-status }}
+  projects:
+    description: 'JSON object of projects grouped by state (DEPLOYED, NOT_DEPLOYED, ORPHANED, NOT_CREATED). Only set by the status action.'
+    value: ${{ steps.result.outputs.projects }}
+
 runs:
   using: composite
   steps:
@@ -22,6 +42,14 @@ runs:
       shell: bash
       env:
         GITHUB_ACTION_PATH: ${{ github.action_path }}
+    - name: Run status
+      if: ${{ inputs.action == 'status' }}
+      id: status
+      run: status.sh
+      shell: bash
+      env:
+        WORKDIRS: ${{ inputs.workdirs }}
+        OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
     - name: Run plan
       if: ${{ inputs.action == 'plan' }}
       id: plan
@@ -30,16 +58,43 @@ runs:
       env:
         WORKDIRS: ${{ inputs.workdirs }}
         DRIFT_CHECK: ${{ inputs.drift_check }}
-    - name: deploy
+        OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
+    - name: Run deploy
       if: ${{ inputs.action == 'deploy' }}
+      id: deploy
       run: deploy.sh
       shell: bash
       env:
         WORKDIRS: ${{ inputs.workdirs }}
         UPDATE_STATE: ${{ inputs.update_state }}
-    - name: destroy
+        OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
+    - name: Run destroy
       if: ${{ inputs.action == 'destroy' }}
+      id: destroy
       run: destroy.sh
       shell: bash
       env:
         WORKDIRS: ${{ inputs.workdirs }}
+        OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
+    # Separate and always(), so the outputs are still set when the operation failed.
+    - name: Set outputs
+      if: always()
+      id: result
+      shell: bash
+      env:
+        OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
+      run: |
+        if [[ -f "$OUTPUTS_FILE" ]]; then
+          cat "$OUTPUTS_FILE" >> "$GITHUB_OUTPUT"
+          # Removed so a later use of this action in the same job cannot read it back.
+          rm -f "$OUTPUTS_FILE"
+        else
+          # The script was killed before it could report; still say something useful.
+          {
+            printf 'status=failure\n'
+            printf 'drift-status=UNKNOWN\n'
+            printf 'error-message<<PULUMI_CLI_EOF\n'
+            printf 'the pulumi step exited without writing its outputs; see the step log\n'
+            printf 'PULUMI_CLI_EOF\n'
+          } >> "$GITHUB_OUTPUT"
+        fi
