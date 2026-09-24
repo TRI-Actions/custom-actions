@@ -4,11 +4,13 @@ This action provides a wrapper around the Pulumi CLI to make its use easier with
 
 It supports plan, deploy and destroy options. With `drift_check` enabled, the plan option also reports the drift status of deployed resources via the `drift-status` output, leaving it to the calling workflow to decide whether to proceed.
 
+A `status` option, which compares the projects in your repository against the state backend, is in preview. See [`status` (preview)](#status-preview).
+
 ## Parameters
 
 There are two parameters required to use this action:
 
-* `action`: The action you want to take. (Supported options are: `plan`, `deploy` and `destroy`)
+* `action`: The action you want to take. (Supported options are: `plan`, `deploy`, `destroy` and, in preview, `status`)
 * `workdirs`: Relative paths of Pulumi stack directories you want to work with. Default value is `.` meaning that it will use the root of your repository. You can pass multiple directories with a space in between them.
 * `drift_check`: Whether drift check will run or not. Default value is `false`
 * `update_state`: Option to update only state to match the infrastructure. Default value is `false`
@@ -131,6 +133,73 @@ A workdir that fails before its Pulumi operation still gets a log file listed in
 `UNKNOWN` matters because the alternative is claiming `IN-SYNC` for a run that never
 looked. Gate on `DRIFTED` rather than on `!= IN-SYNC`, or check `status` first.
 
+## `status` (preview)
+
+> **Preview.** `status` currently prints its findings to the step log only. It sets
+> no status-specific outputs, and its findings do not fail the step. Only a failed
+> `pulumi login` does. Per-project states and outputs will come in a later version.
+
+`status` compares the Pulumi projects declared in your repository with the projects in
+the repository's state backend. It sorts every project into one of three groups:
+
+| Group | Meaning |
+|---|---|
+| existing | Declared in the repository and present in the backend. |
+| absent | Declared in the repository, but not in the backend (never deployed). |
+| orphaned | In the backend, but no longer declared in the repository. Its state, and possibly real resources, are left behind. |
+
+Projects are matched by the `name:` in their `Pulumi.yaml`, not by directory name.
+
+It is read-only: it never runs `pulumi up`, `refresh`, `destroy`, `stack init` or
+`config refresh`.
+
+### Which projects are checked
+
+`workdirs` sets where to look:
+
+* **Default (`.`)**: every `Pulumi.yaml` in the repository is found, at any depth, and every project in the backend is compared. Orphans are only fully detected in this mode.
+* **Specific workdirs**: only `Pulumi.yaml` files under those directories are found. Backend projects that belong elsewhere are ignored, so they do not show up as orphans.
+
+`.git`, `node_modules`, `.venv` and `fixtures` directories are never searched. `fixtures` is skipped because test projects there are never deployed.
+
+A workdir that no longer exists, for example one deleted in the change being checked, is treated as follows:
+
+* **Orphaned**, if the backend has a project with the same name as the directory, and no `Pulumi.yaml` anywhere in the repository declares that name. This is an assumption. A directory whose project had a different `name:` is not matched.
+
+* **Reported in the log as a missing workdir** otherwise. That includes a project that
+  was moved rather than deleted.
+
+The step log also lists any inconsistencies it finds. Examples are a backend project
+with no `main` stack, or stacks whose project is missing from `pulumi project list`.
+
+### Example
+
+``` yaml
+- name: Pulumi status
+  uses: TRI-Actions/custom-actions/actions/pulumi-cli@main
+  with:
+    action: status
+```
+
+Sample step log:
+
+```
+existing (2):
+  network                        infra/network                            stacks=['main']
+  database                       infra/database                           stacks=['main']
+absent (1):
+  cache                          infra/cache                              stacks=[]
+orphaned (1):
+  old-api                        -                                        stacks=['main']
+
+4 projects, 0 problem(s)
+```
+
+### Requirements
+
+`status` runs a Python script, so it needs `python3` on the runner. GitHub-hosted runners
+already have it. It uses only the standard library, so there is nothing to install.
+
 ## Example
 
 ``` yaml
@@ -177,3 +246,5 @@ failure shapes `error-message` has to summarise.
 
 Run it after touching any of the scripts. The failure-propagation cases are the ones that
 matter: they are what fails against the pre-fix scripts.
+
+`status` is not covered by this suite yet.

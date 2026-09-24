@@ -39,6 +39,14 @@ runs:
       shell: bash
       env:
         GITHUB_ACTION_PATH: ${{ github.action_path }}
+    - name: Run status
+      if: ${{ inputs.action == 'status' }}
+      id: status
+      run: status.sh
+      shell: bash
+      env:
+        WORKDIRS: ${{ inputs.workdirs }}
+        OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
     - name: Run plan
       if: ${{ inputs.action == 'plan' }}
       id: plan
