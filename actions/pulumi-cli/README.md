@@ -43,6 +43,7 @@ Whichever action ran, these outputs are set in the Actions context:
 | `failed-workdirs` | Space-separated workdirs that failed, in the same format as the `workdirs` input. Empty on success. |
 | `error-message` | Why the run failed, one line per cause. Empty on success. |
 | `drift-status` | `DRIFTED`, `IN-SYNC` or `UNKNOWN`. Only set by the `plan` action. |
+| `projects` | JSON object of projects grouped by state. Only set by the `status` action; see [`projects`](#projects). |
 
 They are set even when the step fails, so a reporting step can consume them - but it must
 say `if: always()`, or it will be skipped on exactly the runs where the output matters
@@ -135,23 +136,60 @@ looked. Gate on `DRIFTED` rather than on `!= IN-SYNC`, or check `status` first.
 
 ## `status` (preview)
 
-> **Preview.** `status` currently prints its findings to the step log only. It sets
-> no status-specific outputs, and its findings do not fail the step. Only a failed
-> `pulumi login` does. Per-project states and outputs will come in a later version.
+> **Preview.** The shape of the `projects` output may still change.
 
 `status` compares the Pulumi projects declared in your repository with the projects in
-the repository's state backend. It sorts every project into one of three groups:
+the repository's state backend, and gives every project one of four states:
 
-| Group | Meaning |
-|---|---|
-| existing | Declared in the repository and present in the backend. |
-| absent | Declared in the repository, but not in the backend (never deployed). |
-| orphaned | In the backend, but no longer declared in the repository. Its state, and possibly real resources, are left behind. |
+| State | In the repository? | Meaning |
+|---|---|---|
+| `DEPLOYED` | Yes | Its `main` stack has resources in state. |
+| `NOT_DEPLOYED` | Yes | Not in the backend yet, or its `main` stack is empty or missing. |
+| `ORPHANED` | No | Its `main` stack still has resources in state. They are likely still running, with nothing left in the repository to manage or destroy them. |
+| `NOT_CREATED` | No | Its `main` stack is empty or missing. Only the stack is left behind. |
+
+"Has resources" means the resource count `pulumi stack ls` reports is above zero. If
+Pulumi does not report a count, the project is treated as having resources, so a
+possible orphan is flagged rather than hidden.
 
 Projects are matched by the `name:` in their `Pulumi.yaml`, not by directory name.
 
 It is read-only: it never runs `pulumi up`, `refresh`, `destroy`, `stack init` or
 `config refresh`.
+
+### Failure behaviour
+
+The findings never fail the step. An `ORPHANED` project can come from a branch that has
+deployed but not merged yet, so deciding what to act on is left to the caller. The step
+fails, with the cause in `error-message`, only when `status` could not do its job:
+
+* `pulumi login` failed.
+* The backend listing failed, or two `Pulumi.yaml` files declare the same `name:`.
+* A workdir does not exist and could not be matched to an orphan (see below).
+
+### `projects`
+
+A JSON object with one key per state. Every key is always present, holding an array of
+projects sorted by name, or `[]`:
+
+```json
+{
+  "DEPLOYED":     [{"project": "network", "workdir": "infra/network", "resources": 12, "last_update": "2026-09-20T10:00:00Z"}],
+  "NOT_DEPLOYED": [{"project": "cache", "workdir": "infra/cache", "resources": null, "last_update": null}],
+  "ORPHANED":     [{"project": "old-api", "workdir": null, "resources": 8, "last_update": "2026-01-01T00:00:00Z"}],
+  "NOT_CREATED":  []
+}
+```
+
+| Field | Value |
+|---|---|
+| `project` | The `name:` from `Pulumi.yaml`, or the backend's project name. |
+| `workdir` | The project's directory relative to the repository root. For a project no longer in the repository, it is the deleted workdir it was matched from, or `null`. |
+| `resources` | The `main` stack's resource count, or `null` when there is no `main` stack or Pulumi reported no count. |
+| `last_update` | When the `main` stack was last updated, or `null`. |
+
+`projects` is not set when the step fails before the comparison, for example on a failed
+login. Check `status` before calling `fromJSON`, which errors on an empty string.
 
 ### Which projects are checked
 
@@ -164,35 +202,49 @@ It is read-only: it never runs `pulumi up`, `refresh`, `destroy`, `stack init` o
 
 A workdir that no longer exists, for example one deleted in the change being checked, is treated as follows:
 
-* **Orphaned**, if the backend has a project with the same name as the directory, and no `Pulumi.yaml` anywhere in the repository declares that name. This is an assumption. A directory whose project had a different `name:` is not matched.
+* **Matched to a backend project**, if the backend has a project with the same name as the directory, and no `Pulumi.yaml` anywhere in the repository declares that name. It is reported as `ORPHANED` or `NOT_CREATED`, with the deleted workdir as its `workdir`. This is an assumption. A directory whose project had a different `name:` is not matched.
 
-* **Reported in the log as a missing workdir** otherwise. That includes a project that
-  was moved rather than deleted.
-
-The step log also lists any inconsistencies it finds. Examples are a backend project
-with no `main` stack, or stacks whose project is missing from `pulumi project list`.
+* **A failure** otherwise, reported in `error-message`. That includes a project that was
+  moved rather than deleted.
 
 ### Example
 
 ``` yaml
 - name: Pulumi status
+  id: status
   uses: TRI-Actions/custom-actions/actions/pulumi-cli@main
   with:
     action: status
+- name: Report orphans
+  if: fromJSON(steps.status.outputs.projects).ORPHANED[0] != null
+  env:
+    PROJECTS: ${{ steps.status.outputs.projects }}
+  run: |
+    echo "Projects deleted from the repository with resources still deployed:"
+    jq -r '.ORPHANED[] | "  \(.project) (\(.resources) resources, last update \(.last_update))"' <<< "$PROJECTS"
 ```
 
-Sample step log:
+Other lookups:
+
+* Whether a workdir is deployed: `contains(fromJSON(steps.status.outputs.projects).DEPLOYED.*.workdir, 'infra/network')`
+* One job per orphan: `matrix: { orphan: "${{ fromJSON(needs.status.outputs.projects).ORPHANED }}" }`, then `matrix.orphan.project` in the job.
+
+### Step log
+
+Each run logs one line of counts:
 
 ```
-existing (2):
-  network                        infra/network                            stacks=['main']
-  database                       infra/database                           stacks=['main']
-absent (1):
-  cache                          infra/cache                              stacks=[]
-orphaned (1):
-  old-api                        -                                        stacks=['main']
+1 DEPLOYED, 1 NOT_DEPLOYED, 1 ORPHANED, 0 NOT_CREATED
+```
 
-4 projects, 0 problem(s)
+To see every project and its state, re-run the job with debug logging enabled. Locally,
+set `RUNNER_DEBUG=1`.
+
+```
+  cache                          infra/cache                              NOT_DEPLOYED  not in the backend
+  network                        infra/network                            DEPLOYED      12 resource(s), last update 2026-09-20T10:00:00Z
+  old-api                        -                                        ORPHANED      8 resource(s), last update 2026-01-01T00:00:00Z
+1 DEPLOYED, 1 NOT_DEPLOYED, 1 ORPHANED, 0 NOT_CREATED
 ```
 
 ### Requirements
