@@ -50,13 +50,17 @@ runs:
     #                                            #
     ##############################################
 
-    # Path 1: GitHub.com runners — federated OIDC login via target account ID
-    - name: Sign into IAM Role (federated)
+    # Path 1: GitHub.com runners - federated OIDC login via target account ID.
+    # Only the first hop (the federated role in the shared services account)
+    # happens here. The SSM parameters read in the Git & Artifact Auth section
+    # below live in the shared services account, so they must be read before
+    # the credentials are swapped for the target account role.
+    - name: Sign into federated role in shared services account (OIDC)
       if: ${{ inputs.Target_Account != '' }}
-      uses: TRI-Actions/custom-actions/actions/get-aws-credentials@main
+      uses: aws-actions/configure-aws-credentials@v6.2.0
       with:
-        account-id: ${{ inputs.Target_Account }}
-        target-role-name: ${{ inputs.Target_Role_Name }}
+        role-to-assume: arn:aws:iam::371027173325:role/GHAFederatedRole-${{ inputs.Target_Account }}
+        aws-region: us-east-1
 
     # Path 2 (CodeBuild runners, STS assume-role for cross-account access) runs
     # after the Git & Artifact Auth section below. The SSM parameters read there
@@ -109,6 +113,14 @@ runs:
       env:
         JFROG_USER: ${{ inputs.JFrog_user }}
         JFROG_TOKEN: ${{ inputs.JFrog_Token }}
+
+    # Path 1: second hop, into the target account role
+    - name: Sign into IAM Role (federated)
+      if: ${{ inputs.Target_Account != '' }}
+      uses: TRI-Actions/custom-actions/actions/get-aws-credentials@main
+      with:
+        account-id: ${{ inputs.Target_Account }}
+        target-role-name: ${{ inputs.Target_Role_Name }}
 
     # Path 2: CodeBuild runners — optional STS assume-role for cross-account access
     - name: Sign into IAM Role (STS)
