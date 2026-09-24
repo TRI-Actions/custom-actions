@@ -30,6 +30,9 @@ outputs:
   drift-status:
     description: "'DRIFTED' if any workdir has drifted, otherwise 'IN-SYNC'. Only set by the plan action."
     value: ${{ steps.result.outputs.drift-status }}
+  projects:
+    description: 'JSON object of projects grouped by state (DEPLOYED, NOT_DEPLOYED, ORPHANED, NOT_CREATED). Only set by the status action.'
+    value: ${{ steps.result.outputs.projects }}
 
 runs:
   using: composite

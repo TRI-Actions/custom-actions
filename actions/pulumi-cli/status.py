@@ -1,15 +1,19 @@
 """Backend-wide status of every Pulumi project, for status.sh to consume.
 
-Prints one tab-separated record per line:
-    row    <project> <workdir|-> <state> <detail>
-    error  <context> <detail>
+Prints one tab-separated record per line on stdout:
+    output <key>     <value>     an action output, e.g. 'projects' (compact JSON)
+    error  <context> <detail>    a failure, for 'error-message'
+
+A human-readable table goes to stderr, for the step log.
 
 Exits non-zero only when the inventory itself could not be built; per-project
 failures are reported as 'error' records and left for status.sh to act on.
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
 from enum import Enum
 from pathlib import Path
@@ -58,8 +62,13 @@ def deployment(project: PulumiProject) -> tuple[bool, str]:
 
 
 def emit(*fields: str) -> None:
-    # Tabs and newlines would split a record when status.sh reads it back.
-    print("\t".join(" ".join(str(f).split()) for f in fields), flush=True)
+    # Tabs and newlines would split a record when status.sh reads it back. Other
+    # whitespace is kept, so a JSON field is passed through unchanged.
+    print("\t".join(re.sub(r"\s*[\t\r\n]\s*", " ", str(f)) for f in fields), flush=True)
+
+
+def log(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
 
 
 def display_path(path: Path | None, repo_root: Path) -> str:
@@ -140,11 +149,27 @@ def main() -> int:
     # Orphans found through a deleted workdir are reported against that workdir.
     deleted = {name: w for w, name in inventory.deleted_workdirs.items()}
 
-    for project in sorted(inventory.projects.values(), key=lambda p: p.name):
-        workdir = display_path(project.workdir or deleted.get(project.name), repo_root)
-        state, detail = classify(project)
-        emit("row", project.name, workdir, state.value, detail)
+    # The per-project table is long, so it is only printed when asked for. RUNNER_DEBUG
+    # is set by GitHub when a job is re-run with debug logging enabled.
+    verbose = os.environ.get("RUNNER_DEBUG") == "1"
 
+    # Every state is present, even if empty, so a consumer never reads a missing key.
+    groups: dict[str, list[dict]] = {state.value: [] for state in State}
+    for project in sorted(inventory.projects.values(), key=lambda p: p.name):
+        workdir = project.workdir or deleted.get(project.name)
+        state, detail = classify(project)
+        main_stack = project.main_stack or {}
+        groups[state.value].append({
+            "project": project.name,
+            "workdir": None if workdir is None else display_path(workdir, repo_root),
+            "resources": main_stack.get("resourceCount"),
+            "last_update": main_stack.get("lastUpdate"),
+        })
+        if verbose:
+            log(f"  {project.name:<30} {display_path(workdir, repo_root):<40} {state.value:<13} {detail}")
+
+    log(", ".join(f"{len(projects)} {state}" for state, projects in groups.items()))
+    emit("output", "projects", json.dumps(groups, separators=(",", ":")))
     return 0
 
 
