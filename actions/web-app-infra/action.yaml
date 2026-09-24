@@ -8,41 +8,32 @@ inputs:
   Target_Account:
     description: "Target AWS account id (required for GitHub.com runners using federated OIDC login)"
     required: false
-    type: string
   Target_Role_Name:
     description: "Cross account role to assume on target account (used with Target_Account)"
     required: false
     default: DefaultCrossAccountRole
-    type: string
   AWS_IAM_Role:
     description: "Full IAM role ARN for cross-account access (optional, for CodeBuild runners needing cross-account)"
     required: false
-    type: String
   SSM_private_keys:
     description: "comma separated list of ssm key locations, no spaces"
     required: false
-    type: String
   SSM_pat:
     description: "Location of pat token in SSM"
     required: false
-    type: String
   JFrog_user:
     description: "Location of JFrog Username in SSM"
     required: false
-    type: String
   JFrog_Token:
     description: "Location of JFrog Token in SSM"
     required: false
-    type: String
   environment:
     description: "Target environment name (e.g., dev, staging, prod). When omitted, environment is inferred from PR label (legacy behavior for multi-branch model)."
     required: false
-    type: String
     default: ''
   app_source_path:
     description: "Relative path to app source code (for in-app-repo layout). When set, skips git clone and uses local checkout. When omitted, clones app repo from git_url@git_ref in manifest.yaml (legacy standalone behavior)."
     required: false
-    type: String
     default: ''
 
 runs:
@@ -59,38 +50,22 @@ runs:
     #                                            #
     ##############################################
 
-    # Path 1: GitHub.com runners — federated OIDC login via target account ID
-    - name: Sign into IAM Role (federated)
+    # Path 1: GitHub.com runners - federated OIDC login via target account ID.
+    # Only the first hop (the federated role in the shared services account)
+    # happens here. The SSM parameters read in the Git & Artifact Auth section
+    # below live in the shared services account, so they must be read before
+    # the credentials are swapped for the target account role.
+    - name: Sign into federated role in shared services account (OIDC)
       if: ${{ inputs.Target_Account != '' }}
-      uses: TRI-Actions/custom-actions/actions/get-aws-credentials@main
+      uses: aws-actions/configure-aws-credentials@v6.2.0
       with:
-        account-id: ${{ inputs.Target_Account }}
-        target-role-name: ${{ inputs.Target_Role_Name }}
+        role-to-assume: arn:aws:iam::371027173325:role/GHAFederatedRole-${{ inputs.Target_Account }}
+        aws-region: us-east-1
 
-    # Path 2: CodeBuild runners — optional STS assume-role for cross-account access
-    - name: Sign into IAM Role (STS)
-      if: ${{ inputs.Target_Account == '' && inputs.AWS_IAM_Role != '' }}
-      shell: bash
-      run: |
-        CREDS=$(aws sts assume-role \
-          --role-arn ${{ inputs.AWS_IAM_Role }} \
-          --role-session-name web-app-infra-session)
-
-        AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.Credentials.AccessKeyId')
-        AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.Credentials.SecretAccessKey')
-        AWS_SESSION_TOKEN=$(echo $CREDS | jq -r '.Credentials.SessionToken')
-
-        # Export for subsequent steps
-        {
-          echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
-          echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
-          echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN"
-        } >> $GITHUB_ENV
-
-        # Mask sensitive values in logs
-        echo "::add-mask::$AWS_ACCESS_KEY_ID"
-        echo "::add-mask::$AWS_SECRET_ACCESS_KEY"
-        echo "::add-mask::$AWS_SESSION_TOKEN"
+    # Path 2 (CodeBuild runners, STS assume-role for cross-account access) runs
+    # after the Git & Artifact Auth section below. The SSM parameters read there
+    # live in the runner's own account, so they must be read before the
+    # credentials are swapped for the cross-account role.
 
     # Path 3: CodeBuild runners with no cross-account need — runner's existing credentials are used as-is
 
@@ -138,6 +113,39 @@ runs:
       env:
         JFROG_USER: ${{ inputs.JFrog_user }}
         JFROG_TOKEN: ${{ inputs.JFrog_Token }}
+
+    # Path 1: second hop, into the target account role
+    - name: Sign into IAM Role (federated)
+      if: ${{ inputs.Target_Account != '' }}
+      uses: TRI-Actions/custom-actions/actions/get-aws-credentials@main
+      with:
+        account-id: ${{ inputs.Target_Account }}
+        target-role-name: ${{ inputs.Target_Role_Name }}
+
+    # Path 2: CodeBuild runners — optional STS assume-role for cross-account access
+    - name: Sign into IAM Role (STS)
+      if: ${{ inputs.Target_Account == '' && inputs.AWS_IAM_Role != '' }}
+      shell: bash
+      run: |
+        CREDS=$(aws sts assume-role \
+          --role-arn ${{ inputs.AWS_IAM_Role }} \
+          --role-session-name web-app-infra-session)
+
+        AWS_ACCESS_KEY_ID=$(echo $CREDS | jq -r '.Credentials.AccessKeyId')
+        AWS_SECRET_ACCESS_KEY=$(echo $CREDS | jq -r '.Credentials.SecretAccessKey')
+        AWS_SESSION_TOKEN=$(echo $CREDS | jq -r '.Credentials.SessionToken')
+
+        # Export for subsequent steps
+        {
+          echo "AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+          echo "AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+          echo "AWS_SESSION_TOKEN=$AWS_SESSION_TOKEN"
+        } >> $GITHUB_ENV
+
+        # Mask sensitive values in logs
+        echo "::add-mask::$AWS_ACCESS_KEY_ID"
+        echo "::add-mask::$AWS_SECRET_ACCESS_KEY"
+        echo "::add-mask::$AWS_SESSION_TOKEN"
 
     ##############################################
     #                                            #
