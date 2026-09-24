@@ -69,12 +69,13 @@ class PulumiCLI:
                 f"Pulumi returned invalid JSON for {' '.join(result.args)}: {error}"
             ) from error
 
+    # '--json', not '--output json': older CLIs, like the one on the runners, reject
+    # '--output' as an unknown flag.
     def list_projects(self) -> list[dict[str, Any]]:
         return self.run_json(
             "project",
-            "list",
-            "--output",
-            "json",
+            "ls",
+            "--json",
             "--non-interactive",
         )
 
@@ -83,8 +84,7 @@ class PulumiCLI:
             "stack",
             "ls",
             "--all",
-            "--output",
-            "json",
+            "--json",
             "--non-interactive",
         )
 
