@@ -12,6 +12,8 @@ There are two parameters required to use this action:
 * `workdirs`: Relative paths of Pulumi stack directories you want to work with. Default value is `.` meaning that it will use the root of your repository. You can pass multiple directories with a space in between them.
 * `drift_check`: Whether drift check will run or not. Default value is `false`
 * `update_state`: Option to update only state to match the infrastructure. Default value is `false`
+* `stack`: Pulumi stack that `plan` and `deploy` select in each workdir, creating it if it does not exist. Default value is `main`. `destroy` does not select a stack.
+* `backend`: Pulumi state backend URL to log in to, e.g. `s3://tri-pulumi-state-us-east-1/pulumi-iam`. Default is empty, which means `s3://tri-pulumi-state-us-east-1/<repository name>`.
 
 ## Failure behaviour
 

@@ -83,16 +83,16 @@ case "$key" in
     ;;
   stack-select)
     if [[ -n "${STUB_NO_STACK:-}" ]]; then
-      echo "error: no stack named 'main' found" >&2
+      echo "error: no stack named '${3:-}' found" >&2
       exit 1
     fi
     ;;
   stack-init)
     if [[ -n "${STUB_FAIL_INIT:-}" ]]; then
-      echo "error: could not create stack 'main'" >&2
+      echo "error: could not create stack '${3:-}'" >&2
       exit 1
     fi
-    echo "Created stack 'main'"
+    echo "Created stack '${3:-}'"
     ;;
   refresh)
     echo "Refreshing (main):"

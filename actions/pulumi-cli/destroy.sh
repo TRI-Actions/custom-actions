@@ -3,7 +3,8 @@
 # 'pulumi destroy' in every workdir in $WORKDIRS, output teed to ./destroy.out.
 #
 # Env:
-#   WORKDIRS  space-separated relative paths (default '.')
+#   WORKDIRS     space-separated relative paths (default '.')
+#   BACKEND_URL  state backend to log in to (default: derived from the repository)
 
 # pipefail: pulumi is piped into tee, which would otherwise mask its exit status.
 # '-e' is omitted so the workdir loop survives one failing workdir.
