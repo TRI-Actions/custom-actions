@@ -5,6 +5,7 @@
 #
 # Env:
 #   WORKDIRS     space-separated relative paths to search for projects (default '.': the whole repo)
+#   BACKEND_URL  state backend to log in to (default: derived from the repository)
 
 # '-e' is omitted so a failing status.py still reaches finish().
 set -uo pipefail

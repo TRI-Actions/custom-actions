@@ -55,6 +55,7 @@ runs:
       shell: bash
       env:
         WORKDIRS: ${{ inputs.workdirs }}
+        BACKEND_URL: ${{ inputs.backend }}
         OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
     - name: Run plan
       if: ${{ inputs.action == 'plan' }}
