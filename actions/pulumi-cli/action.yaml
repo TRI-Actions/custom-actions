@@ -13,6 +13,12 @@ inputs:
   update_state:
     description: whether we update the state or not
     default: 'false'
+  stack:
+    description: 'Pulumi stack to select, or create if missing, in each workdir. Used by plan and deploy.'
+    default: 'main'
+  backend:
+    description: 'Pulumi state backend URL to log in to. Empty means s3://tri-pulumi-state-us-east-1/<repository name>.'
+    default: ''
 
 outputs:
   status:
@@ -58,6 +64,8 @@ runs:
       env:
         WORKDIRS: ${{ inputs.workdirs }}
         DRIFT_CHECK: ${{ inputs.drift_check }}
+        STACK_NAME: ${{ inputs.stack }}
+        BACKEND_URL: ${{ inputs.backend }}
         OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
     - name: Run deploy
       if: ${{ inputs.action == 'deploy' }}
@@ -67,6 +75,8 @@ runs:
       env:
         WORKDIRS: ${{ inputs.workdirs }}
         UPDATE_STATE: ${{ inputs.update_state }}
+        STACK_NAME: ${{ inputs.stack }}
+        BACKEND_URL: ${{ inputs.backend }}
         OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
     - name: Run destroy
       if: ${{ inputs.action == 'destroy' }}
@@ -75,6 +85,7 @@ runs:
       shell: bash
       env:
         WORKDIRS: ${{ inputs.workdirs }}
+        BACKEND_URL: ${{ inputs.backend }}
         OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
     # Separate and always(), so the outputs are still set when the operation failed.
     - name: Set outputs

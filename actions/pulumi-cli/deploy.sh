@@ -5,6 +5,8 @@
 # Env:
 #   WORKDIRS      space-separated relative paths (default '.')
 #   UPDATE_STATE  'true' to run 'pulumi refresh' before 'pulumi up'
+#   STACK_NAME    stack to select or create in each workdir (default 'main')
+#   BACKEND_URL   state backend to log in to (default: derived from the repository)
 
 # pipefail: pulumi is piped into tee, which would otherwise mask its exit status.
 # '-e' is omitted so the workdir loop survives one failing workdir.
@@ -29,7 +31,7 @@ deploy_one() {
     return 1
   fi
 
-  select_or_init_stack main || return 1
+  select_or_init_stack "${STACK_NAME:-main}" || return 1
 
   if [[ "${UPDATE_STATE:-}" == "true" ]]; then
     log "updating state for ${dir}"

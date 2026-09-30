@@ -186,16 +186,20 @@ capture() {
   return "$status"
 }
 
+# Logs in to $BACKEND_URL, or to a per-repository path in the shared state bucket when
+# that is empty.
 pulumi_login() {
-  local repo_name backend
-  repo_name="$(printf '%s' "${GITHUB_REPOSITORY:-}" | cut -d'/' -f2)"
-  if [[ -z "$repo_name" ]]; then
-    err "GITHUB_REPOSITORY is unset or malformed; cannot derive the state backend path"
-    record_failure login "GITHUB_REPOSITORY is unset or malformed ('${GITHUB_REPOSITORY:-}'); cannot derive the state backend path"
-    FAILED=1
-    finish
+  local repo_name backend="${BACKEND_URL:-}"
+  if [[ -z "$backend" ]]; then
+    repo_name="$(printf '%s' "${GITHUB_REPOSITORY:-}" | cut -d'/' -f2)"
+    if [[ -z "$repo_name" ]]; then
+      err "GITHUB_REPOSITORY is unset or malformed; cannot derive the state backend path"
+      record_failure login "GITHUB_REPOSITORY is unset or malformed ('${GITHUB_REPOSITORY:-}'); cannot derive the state backend path"
+      FAILED=1
+      finish
+    fi
+    backend="s3://${PULUMI_STATE_BUCKET}/${repo_name}"
   fi
-  backend="s3://${PULUMI_STATE_BUCKET}/${repo_name}"
   log "logging in to ${backend}"
   # Captured rather than streamed: this is where a missing or unassumable AWS role
   # surfaces, and the reason has to reach the caller as an output.
