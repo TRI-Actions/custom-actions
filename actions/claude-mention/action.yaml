@@ -100,6 +100,10 @@ runs:
       with:
         role-to-assume: arn:aws:iam::${{ inputs.account-id }}:role/${{ inputs.target-role-name }}
         role-chaining: true
+        # configure-aws-credentials session-tags by default, and the Bedrock role's trust
+        # policy grants sts:AssumeRole only, not sts:TagSession. Without this the hop
+        # fails after 12 retries (claude-code-example run 37349772701).
+        role-skip-session-tagging: true
         aws-region: ${{ inputs.region }}
         role-duration-seconds: 900
         role-session-name: claude-mention-${{ github.run_id }}
