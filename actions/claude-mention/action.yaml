@@ -134,12 +134,32 @@ runs:
         echo "AWS_REGION=$REGION" >> "$GITHUB_ENV"
 
     # No prompt: the action's normal @claude behaviour answers the comment.
+    # The fork's own "Install Bun" step runs `npm install -g bun` from the job's working
+    # directory, which is the PR checkout -- so a PR-planted .npmrc (registry=, or a
+    # proxy) would choose the bun binary that then runs holding the AWS session and the
+    # job token. Install it here instead, from outside the checkout and with the public
+    # registry named explicitly, and hand the path to the action so it skips its own.
+    - name: Install Bun (outside the PR checkout)
+      id: bun
+      if: steps.guard.outputs.run == 'true'
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        BUN_VERSION: "1.3.14"
+      run: |
+        set -euo pipefail
+        npm install -g --registry=https://registry.npmjs.org/ "bun@${BUN_VERSION}"
+        BUN_PATH=$(command -v bun)
+        [ "$("$BUN_PATH" --version)" = "$BUN_VERSION" ] || { echo "::error::bun version mismatch"; exit 1; }
+        echo "path=$BUN_PATH" >> "$GITHUB_OUTPUT"
+
     - name: Answer
       if: steps.guard.outputs.run == 'true'
       uses: TRI-Actions/claude-code-action@555a37826cd295d7dae6509760402dccb114f414 # v1.0.231 + TRI bun patch
       with:
         github_token: ${{ inputs.github-token }}
         use_bedrock: "true"
+        path_to_bun_executable: ${{ steps.bun.outputs.path }}
         claude_args: |
           --model ${{ inputs.model }}
           --max-turns ${{ inputs.max-turns }}
