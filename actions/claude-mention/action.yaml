@@ -1,0 +1,146 @@
+name: "Claude Mention"
+description: "Hardened `@claude` responder on issues and PR comments, Bedrock-backed, answer-only"
+
+# Answers `@claude <question>`. No repository write access, no Bash. Callers pin by SHA:
+#   uses: TRI-Actions/custom-actions/actions/claude-mention@<sha>
+#
+# Shares the hardening and allowlist constraints of ../claude-review/action.yaml; see the
+# comments there. The differences are the trigger and the author gate.
+#
+# Caller job permissions: contents: read, pull-requests: write, issues: write, and
+# id-token: write for oidc.
+
+inputs:
+  aws-auth:
+    description: "`oidc` (github.com) or `runner` (GHES CodeBuild runner role)"
+    default: "oidc"
+  account-id:
+    default: "550939891544"
+  target-role-name:
+    default: "ClaudeCodeBedrockGHA"
+  federated-role-name:
+    default: "GHAFederatedRole"
+  region:
+    default: "us-west-2"
+  model:
+    default: "us.anthropic.claude-sonnet-5"
+  max-turns:
+    default: "30"
+  github-token:
+    default: ${{ github.token }}
+
+outputs:
+  ran:
+    description: "`true` if Claude answered; `false` if the event did not qualify"
+    value: ${{ steps.guard.outputs.run }}
+
+runs:
+  using: "composite"
+  steps:
+    # The author gate. Without it anyone who can comment -- on an internal repo, the
+    # whole enterprise -- spends Bedrock budget and feeds the model arbitrary input while
+    # it holds this job's token. author_association is GitHub's, not the commenter's.
+    # A non-qualifying event is a quiet skip rather than a failure: it is the normal case
+    # for most comments, and a red check on every comment would be noise.
+    - name: Guard
+      id: guard
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        BODY: ${{ github.event.comment.body || github.event.issue.body }}
+        ASSOC: ${{ github.event.comment.author_association || github.event.issue.author_association }}
+        AWS_AUTH: ${{ inputs.aws-auth }}
+        MODEL: ${{ inputs.model }}
+        ACCOUNT: ${{ inputs.account-id }}
+        ROLE: ${{ inputs.target-role-name }}
+        FED: ${{ inputs.federated-role-name }}
+        REGION: ${{ inputs.region }}
+        TURNS: ${{ inputs.max-turns }}
+      run: |
+        set -euo pipefail
+        fail() { echo "::error::claude-mention: $*"; exit 1; }
+        skip() { echo "skipping: $*"; echo "run=false" >> "$GITHUB_OUTPUT"; exit 0; }
+        [[ "$AWS_AUTH" =~ ^(oidc|runner)$ ]] || fail "aws-auth must be oidc or runner"
+        [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
+        [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "account-id must be 12 digits"
+        [[ "$ROLE" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || fail "invalid target-role-name"
+        [[ "$FED" =~ ^[A-Za-z0-9+=,.@_-]{1,48}$ ]] || fail "invalid federated-role-name"
+        [[ "$REGION" =~ ^us-(east|west)-[12]$ ]] || fail "region must be a US region"
+        [[ "$TURNS" =~ ^[0-9]{1,3}$ ]] || fail "max-turns must be a number"
+        case "$EVENT" in
+          issue_comment|pull_request_review_comment|issues) ;;
+          *) fail "runs on issue_comment, pull_request_review_comment or issues (got '$EVENT')" ;;
+        esac
+        case "$BODY" in *@claude*) ;; *) skip "no @claude mention" ;; esac
+        case "$ASSOC" in
+          OWNER|MEMBER|COLLABORATOR) ;;
+          *) skip "author association '$ASSOC' may not trigger Claude" ;;
+        esac
+        echo "run=true" >> "$GITHUB_OUTPUT"
+
+    - name: Check out repository code
+      if: steps.guard.outputs.run == 'true'
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        fetch-depth: 0
+        token: ${{ inputs.github-token }}
+
+    - name: AWS - federated role (OIDC)
+      if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc'
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      with:
+        role-to-assume: arn:aws:iam::371027173325:role/${{ inputs.federated-role-name }}-${{ inputs.account-id }}
+        aws-region: ${{ inputs.region }}
+        role-duration-seconds: 900
+        role-session-name: claude-mention-${{ github.run_id }}
+
+    - name: AWS - Bedrock role
+      if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc'
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.account-id }}:role/${{ inputs.target-role-name }}
+        role-chaining: true
+        aws-region: ${{ inputs.region }}
+        role-duration-seconds: 900
+        role-session-name: claude-mention-${{ github.run_id }}
+
+    - name: AWS - runner credentials
+      if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'runner'
+      shell: bash
+      env:
+        REGION: ${{ inputs.region }}
+      run: |
+        set -euo pipefail
+        CREDS=$(aws configure export-credentials --format process)
+        CREDS="$CREDS" python3 - <<'PY'
+        import json, os
+        c = json.loads(os.environ["CREDS"])
+        for k in ("AccessKeyId", "SecretAccessKey", "SessionToken"):
+            if c.get(k):
+                print(f"::add-mask::{c[k]}")
+        PY
+        CREDS="$CREDS" python3 - <<'PY' >> "$GITHUB_ENV"
+        import json, os
+        c = json.loads(os.environ["CREDS"])
+        print(f"AWS_ACCESS_KEY_ID={c['AccessKeyId']}")
+        print(f"AWS_SECRET_ACCESS_KEY={c['SecretAccessKey']}")
+        if c.get("SessionToken"):
+            print(f"AWS_SESSION_TOKEN={c['SessionToken']}")
+        PY
+        echo "AWS_REGION=$REGION" >> "$GITHUB_ENV"
+
+    # No prompt: the action's normal @claude behaviour answers the comment.
+    - name: Answer
+      if: steps.guard.outputs.run == 'true'
+      uses: TRI-Actions/claude-code-action@555a37826cd295d7dae6509760402dccb114f414 # v1.0.231 + TRI bun patch
+      with:
+        github_token: ${{ inputs.github-token }}
+        use_bedrock: "true"
+        claude_args: |
+          --model ${{ inputs.model }}
+          --max-turns ${{ inputs.max-turns }}
+          --restricted
+          --setting-sources user
+          --strict-mcp-config
+          --allowedTools "mcp__github_inline_comment__create_inline_comment"
+          --disallowedTools "Bash" "WebFetch" "WebSearch" "Read(//proc/**)" "Read(/${{ runner.temp }}/**)" "Read(./.git/**)" "Read(//**/.git/config)"
