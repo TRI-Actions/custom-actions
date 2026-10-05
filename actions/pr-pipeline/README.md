@@ -441,6 +441,12 @@ jobs:
           conclusion: ${{ job.status == 'cancelled' && 'cancelled' || steps.plan.outcome == 'success' && 'success' || 'failure' }}
           title: ${{ job.status == 'cancelled' && 'Plan cancelled' || steps.fresh.outputs.stale == 'true' && 'Branch behind main' || steps.plan.outcome == 'success' && 'Plan succeeded' || 'Plan failed' }}
           summary-file: ${{ runner.temp }}/plan.md
+
+      # A stale branch fails the plan check without failing a step, so fail the job too.
+      - if: ${{ !cancelled() && steps.fresh.outputs.stale == 'true' }}
+        run: |
+          echo "::error::Branch behind main"
+          exit 1
 ```
 
 ### Deploy workflow
@@ -491,6 +497,14 @@ jobs:
             ### Deploy rejected
 
             ${{ steps.cmd.outputs.error }}. Usage: `!deploy <12-digit account id>`.
+
+      # A rejected command is a failed run, so it shows up red like every other rejection.
+      - if: steps.cmd.outputs.matched == 'true' && steps.cmd.outputs.valid == 'false'
+        env:
+          ERROR: ${{ steps.cmd.outputs.error }}
+        run: |
+          echo "::error::Deploy rejected: $ERROR"
+          exit 1
 
   apply:
     needs: gate
@@ -632,6 +646,23 @@ jobs:
           mode: recreate
           body-file: ${{ runner.temp }}/deploy.md
 
+      - id: result
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+          GATES: ${{ steps.gates.outcome }}
+          APPLY: ${{ steps.apply.outcome }}
+          MERGED: ${{ steps.merge.outputs.merged }}
+        run: |
+          if [ "$JOB_STATUS" = cancelled ]; then title="Cancelled"
+          elif [ "$MERGED" = true ]; then title="Deployed and merged"
+          elif [ "$APPLY" = success ]; then title="Applied but not merged"
+          elif [ "$APPLY" = failure ]; then title="Deploy failed"
+          elif [ "$GATES" = failure ]; then title="Deploy rejected"
+          else title="Deploy did not run"
+          fi
+          echo "title=$title" >> "$GITHUB_OUTPUT"
+
       # The one finalizer, after the merge, so a failed merge is a failed check.
       - if: always()
         uses: TRI-Actions/custom-actions/actions/pr-pipeline/check-run@pr-pipeline/v1.0.0
@@ -639,6 +670,7 @@ jobs:
           mode: finish
           id: ${{ steps.check.outputs.id }}
           conclusion: ${{ job.status == 'cancelled' && 'cancelled' || steps.merge.outputs.merged == 'true' && 'success' || 'failure' }}
+          title: ${{ steps.result.outputs.title }}
           summary-file: ${{ runner.temp }}/deploy.md
 ```
 

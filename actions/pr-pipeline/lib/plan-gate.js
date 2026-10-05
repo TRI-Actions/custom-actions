@@ -78,7 +78,7 @@ function evaluate(runs, { sha, checkName, externalIds, notAfter = null }) {
         passed: false,
         reason:
           `The latest plan${subject} on commit ${sha7} ended with ${newest.conclusion || 'no conclusion'}` +
-          `${title ? `: ${title}` : ''}.${url ? ` See ${url}` : ''}`,
+          `${title ? ` (${title})` : ''}.${url ? ` See [the plan check](${url}).` : ''}`,
         checkUrl: url,
       };
     }

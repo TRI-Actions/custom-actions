@@ -83,7 +83,7 @@ test('older success and newer failure fails', () => {
   assert.equal(result.passed, false);
   assert.equal(
     result.reason,
-    'The latest plan for prod on commit abcdef0 ended with failure: Plan failed. See https://ghes.example.com/acme/infra/runs/20',
+    'The latest plan for prod on commit abcdef0 ended with failure (Plan failed). See [the plan check](https://ghes.example.com/acme/infra/runs/20).',
   );
   assert.equal(result.checkUrl, 'https://ghes.example.com/acme/infra/runs/20');
 });
@@ -99,7 +99,7 @@ test('newest is chosen by highest id regardless of order', () => {
   assert.equal(result.passed, false);
   assert.equal(
     result.reason,
-    'The latest plan for prod on commit abcdef0 ended with failure. See https://ghes.example.com/acme/infra/runs/30',
+    'The latest plan for prod on commit abcdef0 ended with failure. See [the plan check](https://ghes.example.com/acme/infra/runs/30).',
   );
 });
 
@@ -251,7 +251,7 @@ test('"*" matches by check name only, with any or no external_id', () => {
   assert.match(running.reason, /^The plan on commit abcdef0 is still running\./);
 
   const failed = evaluate([checkRun(10), checkRun(11, { conclusion: 'timed_out', title: 'Timed out' })]);
-  assert.match(failed.reason, /^The latest plan on commit abcdef0 ended with timed_out: Timed out\./);
+  assert.match(failed.reason, /^The latest plan on commit abcdef0 ended with timed_out \(Timed out\)\./);
 });
 
 test('evaluate refuses an empty external id list instead of passing vacuously', () => {
