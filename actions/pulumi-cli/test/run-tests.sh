@@ -246,7 +246,7 @@ new_sandbox() {
   unset STUB_FAIL_CMDS STUB_FAIL_IN_DIR STUB_NO_STACK STUB_FAIL_INIT \
         STUB_DRIFT STUB_DRIFT_IN_DIR STUB_PREVIEW_MARKER STUB_PREVIEW_EXTRA \
         STUB_LOGIN_ERROR STUB_WRAPPED_ERROR STUB_BARE_ERROR \
-        STUB_ERROR_RESOURCE STUB_ERROR_ADVICE
+        STUB_ERROR_RESOURCE STUB_ERROR_ADVICE STUB_PYTHON_ERROR STUB_PYTHON_INDENT
 }
 
 # Creates the dirs and points WORKDIRS at them.
@@ -284,6 +284,8 @@ run() {
     STUB_BARE_ERROR="${STUB_BARE_ERROR:-}" \
     STUB_ERROR_RESOURCE="${STUB_ERROR_RESOURCE:-}" \
     STUB_ERROR_ADVICE="${STUB_ERROR_ADVICE:-}" \
+    STUB_PYTHON_ERROR="${STUB_PYTHON_ERROR:-}" \
+    STUB_PYTHON_INDENT="${STUB_PYTHON_INDENT:-}" \
     "$ACTION_DIR/$1" 2>&1
   )"
   STATUS=$?
@@ -887,6 +889,27 @@ test_error_message_reports_malformed_repository() {
   assert_never_ran "login"
 }
 
+test_error_message_reports_a_python_exception() {
+  workdirs dev
+  STUB_FAIL_CMDS="preview"
+  STUB_PYTHON_ERROR="Exception: Policy dependency 'x' not found for role 'y'"
+  run plan.sh
+  assert_status 1
+  assert_error_message 1 "dev: pulumi preview failed - Exception: Policy dependency 'x' not found for role 'y'"
+  assert_error_message_lacks "Program failed with an unhandled exception" "File " "iam.IAM()"
+}
+
+test_error_message_reports_an_indented_python_exception() {
+  workdirs dev
+  STUB_FAIL_CMDS="up"
+  STUB_PYTHON_ERROR="KeyError: 'name'"
+  STUB_PYTHON_INDENT="    "
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "dev: pulumi up failed - KeyError: 'name'"
+  assert_error_message_lacks "Traceback" "File "
+}
+
 test_login_defaults_to_the_repository_backend() {
   run deploy.sh
   assert_status 0
@@ -1167,6 +1190,8 @@ TESTS=(
   error_message_only_names_the_workdir_that_failed
   error_message_reports_no_valid_workdirs
   error_message_reports_malformed_repository
+  error_message_reports_a_python_exception
+  error_message_reports_an_indented_python_exception
   login_defaults_to_the_repository_backend
   login_uses_the_backend_input
   destroy_uses_the_backend_input
