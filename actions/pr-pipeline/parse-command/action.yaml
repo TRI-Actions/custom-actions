@@ -1,0 +1,62 @@
+name: 'pr-pipeline/parse-command'
+description: 'Parses a PR comment command (e.g. "!deploy 123456789012") from the first non-empty line and validates its arguments'
+
+inputs:
+  github-token:
+    description: 'GitHub token for actions/github-script (no API calls are made)'
+    required: false
+    default: ${{ github.token }}
+  body:
+    description: 'Raw comment body'
+    required: true
+  command:
+    description: 'Command that must be the first token, matched exactly and case-sensitively (e.g. "!deploy")'
+    required: true
+  arg-pattern:
+    description: 'JavaScript regex (u flag) every argument must match in full; ^ and $ are implied (e.g. "[0-9]{12}")'
+    required: false
+    default: '^[A-Za-z0-9][A-Za-z0-9._-]*$'
+  min-args:
+    description: 'Minimum number of arguments'
+    required: false
+    default: '0'
+  max-args:
+    description: 'Maximum number of arguments'
+    required: false
+    default: '1'
+
+outputs:
+  matched:
+    description: 'Whether the comment starts with the command (true/false)'
+    value: ${{ steps.run.outputs.matched }}
+  valid:
+    description: 'Whether the command matched and its arguments are valid (true/false)'
+    value: ${{ steps.run.outputs.valid }}
+  args:
+    description: 'JSON array of arguments (empty unless valid)'
+    value: ${{ steps.run.outputs.args }}
+  arg:
+    description: 'First argument, or empty'
+    value: ${{ steps.run.outputs.arg }}
+  error:
+    description: 'User-facing error when matched but invalid, otherwise empty'
+    value: ${{ steps.run.outputs.error }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: actions/github-script@v7
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PRP_BODY: ${{ inputs.body }}
+        PRP_COMMAND: ${{ inputs.command }}
+        PRP_ARG_PATTERN: ${{ inputs.arg-pattern }}
+        PRP_MIN_ARGS: ${{ inputs.min-args }}
+        PRP_MAX_ARGS: ${{ inputs.max-args }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('path');
+          const mod = require(path.join(process.env.ACTION_PATH, '..', 'lib', 'command.js'));
+          await mod.run({ github, context, core, env: process.env });

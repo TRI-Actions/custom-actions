@@ -1,0 +1,72 @@
+name: 'pr-pipeline/authorize'
+description: 'Authorizes a PR comment command via team membership, or for a commenter with write access via an approval of the head commit by a reviewer with write access who did not author or commit to the PR'
+
+inputs:
+  github-token:
+    description: 'GitHub token; team checks need read:org, so pass a PAT when teams is set'
+    required: false
+    default: ${{ github.token }}
+  actor:
+    description: 'Login of the comment author'
+    required: true
+  triggering-actor:
+    description: 'Login that triggered the run; must equal actor (case-insensitive), which blocks re-runs of another user''s command; pass an empty string to skip the check'
+    required: false
+    default: ${{ github.triggering_actor }}
+  teams:
+    description: 'Comma-separated team slugs whose active members are authorized (may be empty)'
+    required: false
+    default: ''
+  org:
+    description: 'Organization that owns the teams'
+    required: false
+    default: ${{ github.repository_owner }}
+  allow-approval:
+    description: 'Also authorize a commenter with write access when the head commit is approved by a reviewer with write access who is not the PR author and did not author or commit any commit in the PR (true/false)'
+    required: false
+    default: 'true'
+  sha:
+    description: 'Full PR head commit SHA (required when allow-approval is true)'
+    required: false
+    default: ''
+  pr-author:
+    description: 'Login of the PR author (required when allow-approval is true)'
+    required: false
+    default: ''
+  pr-number:
+    description: 'PR number (required when allow-approval is true)'
+    required: false
+    default: ''
+
+outputs:
+  authorized:
+    description: 'Whether the actor is authorized (true/false)'
+    value: ${{ steps.run.outputs.authorized }}
+  via:
+    description: 'How authorization was granted, e.g. "team:ie" or "approval:alice"; empty when denied'
+    value: ${{ steps.run.outputs.via }}
+  reason:
+    description: 'Human-readable explanation of the decision'
+    value: ${{ steps.run.outputs.reason }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: actions/github-script@v7
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PRP_ACTOR: ${{ inputs.actor }}
+        PRP_TRIGGERING_ACTOR: ${{ inputs.triggering-actor }}
+        PRP_TEAMS: ${{ inputs.teams }}
+        PRP_ORG: ${{ inputs.org }}
+        PRP_ALLOW_APPROVAL: ${{ inputs.allow-approval }}
+        PRP_SHA: ${{ inputs.sha }}
+        PRP_PR_AUTHOR: ${{ inputs.pr-author }}
+        PRP_PR_NUMBER: ${{ inputs.pr-number }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('path');
+          const mod = require(path.join(process.env.ACTION_PATH, '..', 'lib', 'authorize.js'));
+          await mod.run({ github, context, core, env: process.env });

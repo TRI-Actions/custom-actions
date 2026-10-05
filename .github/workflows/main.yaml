@@ -73,4 +73,17 @@ jobs:
               repo: context.repo.repo,
               body: commentBody
             });
-          
+
+  pr-pipeline-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run pr-pipeline tests
+        run: node --test actions/pr-pipeline/test/*.test.js

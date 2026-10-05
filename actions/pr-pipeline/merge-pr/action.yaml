@@ -1,0 +1,46 @@
+name: 'pr-pipeline/merge-pr'
+description: 'Merges a pull request only if its head is still at the expected commit'
+
+inputs:
+  github-token:
+    description: 'Token used to merge. Pass a PAT: merges made with GITHUB_TOKEN do not trigger push workflows'
+    required: false
+    default: ${{ github.token }}
+  pr-number:
+    description: 'Pull request number'
+    required: true
+  sha:
+    description: 'Full commit SHA the PR head must still point to; the merge is refused if the head moved'
+    required: true
+  method:
+    description: 'Merge method: merge, squash or rebase'
+    required: false
+    default: 'merge'
+
+outputs:
+  merged:
+    description: 'Whether GitHub confirmed the merge with merged true and a merge commit SHA (true/false)'
+    value: ${{ steps.run.outputs.merged }}
+  merge-sha:
+    description: 'SHA of the merge commit (empty if not merged)'
+    value: ${{ steps.run.outputs.merge-sha }}
+  error:
+    description: 'Why the merge failed (empty on success)'
+    value: ${{ steps.run.outputs.error }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: actions/github-script@v7
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PRP_PR_NUMBER: ${{ inputs.pr-number }}
+        PRP_SHA: ${{ inputs.sha }}
+        PRP_METHOD: ${{ inputs.method }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('path');
+          const mod = require(path.join(process.env.ACTION_PATH, '..', 'lib', 'merge.js'));
+          await mod.run({ github, context, core, env: process.env });
