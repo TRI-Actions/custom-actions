@@ -6,6 +6,8 @@
 # Env:
 #   WORKDIRS     space-separated relative paths (default '.')
 #   DRIFT_CHECK  'true' to refresh first and report drift
+#   STACK_NAME   stack to select or create in each workdir (default 'main')
+#   BACKEND_URL  state backend to log in to (default: derived from the repository)
 
 # pipefail: pulumi is piped into tee, which would otherwise mask its exit status.
 # '-e' is omitted so the workdir loop survives one failing workdir.
@@ -59,7 +61,7 @@ plan_one() {
   local drift_check="${DRIFT_CHECK:-}"
   local drift_line=""
 
-  select_or_init_stack main || return 1
+  select_or_init_stack "${STACK_NAME:-main}" || return 1
 
   if [[ "$drift_check" == "true" ]]; then
     # Teed into OUT_FILE so a refresh failure still leaves a log to read. On success

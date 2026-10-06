@@ -72,11 +72,29 @@ error_lines() {
   awk -v max="$MAX_CAUSES" '
     {
       line = $0
+      match($0, /^[[:space:]]*/)
+      indent = RLENGTH
       sub(/^[[:space:]]+/, "", line)
       # Also drops a trailing CR, so a log with CRLF endings does not keep it.
       sub(/[[:space:]]+$/, "", line)
       if (line == "") next
       last = line
+
+      # A Python program error is a traceback whose frames are indented below the
+      # "Traceback" line; the first line back at its indentation is the exception
+      # ("Exception: Policy ... not found"), which is the cause. The frames are not.
+      if (line ~ /^Traceback \(most recent call last\):$/) {
+        in_traceback = 1
+        traceback_indent = indent
+        next
+      }
+      if (in_traceback) {
+        if (indent > traceback_indent) next
+        in_traceback = 0
+        n++
+        if (n <= max) { cause[n] = line; res[n] = resource }
+        next
+      }
 
       # Only "*", never "-" or "+": those two lead every line of a pulumi diff, so
       # treating them as bullets would report deleted resources as failure causes.
@@ -94,7 +112,8 @@ error_lines() {
       lower = tolower(line)
       if (is_error && (lower ~ /^error:[[:space:]]*$/ ||
                        lower ~ /^error:[[:space:]]+[0-9]+[[:space:]]+errors?[[:space:]]+occurred/ ||
-                       lower ~ /^error:[[:space:]]+(preview|update|refresh|destroy|import) failed/)) {
+                       lower ~ /^error:[[:space:]]+(preview|update|refresh|destroy|import) failed/ ||
+                       lower ~ /^error:[[:space:]]+program failed with an unhandled exception/)) {
         if (wrapper == "") wrapper = line
         seen_wrapper = 1
         list = "cause"
@@ -186,16 +205,20 @@ capture() {
   return "$status"
 }
 
+# Logs in to $BACKEND_URL, or to a per-repository path in the shared state bucket when
+# that is empty.
 pulumi_login() {
-  local repo_name backend
-  repo_name="$(printf '%s' "${GITHUB_REPOSITORY:-}" | cut -d'/' -f2)"
-  if [[ -z "$repo_name" ]]; then
-    err "GITHUB_REPOSITORY is unset or malformed; cannot derive the state backend path"
-    record_failure login "GITHUB_REPOSITORY is unset or malformed ('${GITHUB_REPOSITORY:-}'); cannot derive the state backend path"
-    FAILED=1
-    finish
+  local repo_name backend="${BACKEND_URL:-}"
+  if [[ -z "$backend" ]]; then
+    repo_name="$(printf '%s' "${GITHUB_REPOSITORY:-}" | cut -d'/' -f2)"
+    if [[ -z "$repo_name" ]]; then
+      err "GITHUB_REPOSITORY is unset or malformed; cannot derive the state backend path"
+      record_failure login "GITHUB_REPOSITORY is unset or malformed ('${GITHUB_REPOSITORY:-}'); cannot derive the state backend path"
+      FAILED=1
+      finish
+    fi
+    backend="s3://${PULUMI_STATE_BUCKET}/${repo_name}"
   fi
-  backend="s3://${PULUMI_STATE_BUCKET}/${repo_name}"
   log "logging in to ${backend}"
   # Captured rather than streamed: this is where a missing or unassumable AWS role
   # surfaces, and the reason has to reach the caller as an output.

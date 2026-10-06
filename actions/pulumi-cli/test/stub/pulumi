@@ -28,6 +28,11 @@
 #                         'aws:s3:Bucket (logs)'. Defaults to the stack pseudo-resource.
 #   STUB_ERROR_ADVICE     append pulumi's canned bulleted troubleshooting list under the
 #                         cause, as the AssumeRole failure does
+#   STUB_PYTHON_ERROR     exception line for a failure in STUB_FAIL_CMDS reported as a
+#                         Python program error: pulumi's "Program failed" wrapper, then
+#                         a traceback whose last line is this text
+#   STUB_PYTHON_INDENT    prefix for every line of that report, e.g. "    " for the
+#                         indented form pulumi uses inside a diagnostics block
 set -uo pipefail
 
 cmd="${1:-}"
@@ -83,16 +88,16 @@ case "$key" in
     ;;
   stack-select)
     if [[ -n "${STUB_NO_STACK:-}" ]]; then
-      echo "error: no stack named 'main' found" >&2
+      echo "error: no stack named '${3:-}' found" >&2
       exit 1
     fi
     ;;
   stack-init)
     if [[ -n "${STUB_FAIL_INIT:-}" ]]; then
-      echo "error: could not create stack 'main'" >&2
+      echo "error: could not create stack '${3:-}'" >&2
       exit 1
     fi
-    echo "Created stack 'main'"
+    echo "Created stack '${3:-}'"
     ;;
   refresh)
     echo "Refreshing (main):"
@@ -135,6 +140,22 @@ if should_fail; then
     up) phase="update" ;;
     *) phase="$key" ;;
   esac
+  if [[ -n "${STUB_PYTHON_ERROR:-}" ]]; then
+    p="${STUB_PYTHON_INDENT:-}"
+    {
+      echo "${p}error: Program failed with an unhandled exception:"
+      echo "${p}Traceback (most recent call last):"
+      echo "${p}  File \"/work/__main__.py\", line 4, in <module>"
+      echo "${p}    iam.IAM()"
+      echo "${p}  File \"/site-packages/shared/iam.py\", line 63, in __init__"
+      echo "${p}    raise Exception(f\"Policy dependency not found\")"
+      echo "${p}${STUB_PYTHON_ERROR}"
+      echo ""
+      echo "Resources:"
+      echo "    14 unchanged"
+    } >&2
+    exit 255
+  fi
   if [[ -n "${STUB_WRAPPED_ERROR:-}" ]]; then
     IFS='|' read -r -a causes <<< "${STUB_WRAPPED_ERROR}"
     {

@@ -239,11 +239,14 @@ new_sandbox() {
   WORKDIRS="."
   UPDATE_STATE="false"
   DRIFT_CHECK="false"
+  # Empty, as when the action input is left at its default for the backend.
+  STACK_NAME=""
+  BACKEND_URL=""
 
   unset STUB_FAIL_CMDS STUB_FAIL_IN_DIR STUB_NO_STACK STUB_FAIL_INIT \
         STUB_DRIFT STUB_DRIFT_IN_DIR STUB_PREVIEW_MARKER STUB_PREVIEW_EXTRA \
         STUB_LOGIN_ERROR STUB_WRAPPED_ERROR STUB_BARE_ERROR \
-        STUB_ERROR_RESOURCE STUB_ERROR_ADVICE
+        STUB_ERROR_RESOURCE STUB_ERROR_ADVICE STUB_PYTHON_ERROR STUB_PYTHON_INDENT
 }
 
 # Creates the dirs and points WORKDIRS at them.
@@ -265,6 +268,8 @@ run() {
     WORKDIRS="$WORKDIRS" \
     UPDATE_STATE="$UPDATE_STATE" \
     DRIFT_CHECK="$DRIFT_CHECK" \
+    STACK_NAME="$STACK_NAME" \
+    BACKEND_URL="$BACKEND_URL" \
     STUB_LOG="$STUB_LOG" \
     STUB_FAIL_CMDS="${STUB_FAIL_CMDS:-}" \
     STUB_FAIL_IN_DIR="${STUB_FAIL_IN_DIR:-}" \
@@ -279,6 +284,8 @@ run() {
     STUB_BARE_ERROR="${STUB_BARE_ERROR:-}" \
     STUB_ERROR_RESOURCE="${STUB_ERROR_RESOURCE:-}" \
     STUB_ERROR_ADVICE="${STUB_ERROR_ADVICE:-}" \
+    STUB_PYTHON_ERROR="${STUB_PYTHON_ERROR:-}" \
+    STUB_PYTHON_INDENT="${STUB_PYTHON_INDENT:-}" \
     "$ACTION_DIR/$1" 2>&1
   )"
   STATUS=$?
@@ -882,6 +889,96 @@ test_error_message_reports_malformed_repository() {
   assert_never_ran "login"
 }
 
+test_error_message_reports_a_python_exception() {
+  workdirs dev
+  STUB_FAIL_CMDS="preview"
+  STUB_PYTHON_ERROR="Exception: Policy dependency 'x' not found for role 'y'"
+  run plan.sh
+  assert_status 1
+  assert_error_message 1 "dev: pulumi preview failed - Exception: Policy dependency 'x' not found for role 'y'"
+  assert_error_message_lacks "Program failed with an unhandled exception" "File " "iam.IAM()"
+}
+
+test_error_message_reports_an_indented_python_exception() {
+  workdirs dev
+  STUB_FAIL_CMDS="up"
+  STUB_PYTHON_ERROR="KeyError: 'name'"
+  STUB_PYTHON_INDENT="    "
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "dev: pulumi up failed - KeyError: 'name'"
+  assert_error_message_lacks "Traceback" "File "
+}
+
+test_login_defaults_to_the_repository_backend() {
+  run deploy.sh
+  assert_status 0
+  assert_ran "login s3://tri-pulumi-state-us-east-1/example-infra"
+}
+
+test_login_uses_the_backend_input() {
+  BACKEND_URL="s3://other-bucket/pulumi-iam"
+  run plan.sh
+  assert_status 0
+  assert_ran "login s3://other-bucket/pulumi-iam"
+  assert_never_ran "tri-pulumi-state-us-east-1"
+}
+
+test_destroy_uses_the_backend_input() {
+  BACKEND_URL="s3://other-bucket/pulumi-iam"
+  run destroy.sh
+  assert_status 0
+  assert_ran "login s3://other-bucket/pulumi-iam"
+}
+
+# With an explicit backend the repository name is not needed, so its absence is no error.
+test_backend_input_does_not_need_the_repository() {
+  OUTPUTS_FILE="$SANDBOX/outputs.txt"
+  OUTPUT="$(
+    cd "$SANDBOX" || exit 99
+    PATH="$SANDBOX/bin:$PATH" GITHUB_REPOSITORY="" OUTPUTS_FILE="$OUTPUTS_FILE" \
+    BACKEND_URL="s3://other-bucket/pulumi-iam" \
+    WORKDIRS="." STUB_LOG="$STUB_LOG" "$ACTION_DIR/deploy.sh" 2>&1
+  )"
+  STATUS=$?
+  assert_status 0
+  assert_ran "login s3://other-bucket/pulumi-iam"
+  assert_error_message 0
+}
+
+test_stack_defaults_to_main() {
+  run plan.sh
+  assert_status 0
+  assert_ran "stack select main"
+}
+
+test_plan_uses_the_stack_input() {
+  STACK_NAME="iam"
+  run plan.sh
+  assert_status 0
+  assert_ran "stack select iam"
+  assert_never_ran "stack select main"
+}
+
+test_deploy_creates_the_stack_input_when_missing() {
+  STACK_NAME="iam"
+  STUB_NO_STACK=1
+  run deploy.sh
+  assert_status 0
+  assert_ran "stack init iam"
+  assert_never_ran "stack init main"
+}
+
+test_error_message_names_the_stack_input() {
+  workdirs dev
+  STACK_NAME="iam"
+  STUB_NO_STACK=1
+  STUB_FAIL_INIT=1
+  run deploy.sh
+  assert_status 1
+  assert_error_message 1 "dev:" "could not select or create stack 'iam'"
+}
+
 test_error_message_is_echoed_to_the_step_log() {
   STUB_FAIL_CMDS="up"
   run deploy.sh
@@ -1093,6 +1190,16 @@ TESTS=(
   error_message_only_names_the_workdir_that_failed
   error_message_reports_no_valid_workdirs
   error_message_reports_malformed_repository
+  error_message_reports_a_python_exception
+  error_message_reports_an_indented_python_exception
+  login_defaults_to_the_repository_backend
+  login_uses_the_backend_input
+  destroy_uses_the_backend_input
+  backend_input_does_not_need_the_repository
+  stack_defaults_to_main
+  plan_uses_the_stack_input
+  deploy_creates_the_stack_input_when_missing
+  error_message_names_the_stack_input
   error_message_is_echoed_to_the_step_log
   stack_failure_still_writes_a_log_file
   plan_refresh_failure_still_writes_plan_out
