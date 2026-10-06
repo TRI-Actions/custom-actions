@@ -19,9 +19,10 @@ Hardened, review-only Claude Code PR review on Bedrock. Works on github.com and 
 | `target-role-name` | Bedrock role (oidc) | `ClaudeCodeBedrockGHA` |
 | `federated-role-name` | Federated role base name (oidc) | `GHAFederatedRole` |
 | `region` | US region | `us-west-2` |
-| `model` | `us.anthropic.claude-*` inference profile | `us.anthropic.claude-sonnet-5` |
+| `model` | `us.anthropic.claude-*` inference profile, optionally with a `:N` version suffix | `us.anthropic.claude-sonnet-5` |
 | `max-turns` | Turn cap | `30` |
 | `prompt-addendum` | Repo-specific guidance, appended to the fixed prompt | `""` |
+| `runner-bedrock-role-arn` | runner only. A Bedrock-only role assumed for the run (15-minute session, session policy limited to `bedrock:InvokeModel*`). **Set it.** Empty exports the runner role's own credentials, with a warning | `""` |
 | `github-token` | Token for comments | `github.token` |
 
 ## Outputs
@@ -40,7 +41,9 @@ These are fixed inside the action:
 - `--restricted --setting-sources user --strict-mcp-config`: repo `.claude/settings.json`, hooks and repo MCP servers don't load.
 - The only tool is inline comments. `Bash`, `WebFetch` and `WebSearch` are denied.
 - Reads are denied on `/proc/**`, the runner temp directory (which holds `GITHUB_ENV` with the AWS keys) and `.git/**` (which holds the checkout token).
-- oidc sessions last 900s, named `claude-review-<run_id>`. `configure-aws-credentials` is pinned by SHA.
+- Sessions last 900s, named `claude-review-<run_id>`. `configure-aws-credentials` is pinned by SHA. Role-chained sessions can't be refreshed, so a review that runs past 15 minutes fails, and the verdict records a failed review as `blocked`. Keep `timeout-minutes` near 15.
+- Bun is installed before any credential is in the environment: the platform tarball is fetched from the public npm registry and checked against a pinned SHA-512. No npm install scripts run.
+- The AWS credentials the action exports are blanked when it finishes, so later steps in your job don't inherit them. Keep the job single-purpose anyway.
 - Only same-repo PRs; anything else fails closed. Drafts are skipped.
 - No commit status (forgeable) and no approval.
 
@@ -161,6 +164,9 @@ on:
       - '**/go.mod'
       - '**/go.sum'
       - '**/.terraform.lock.hcl'
+      - '**/.npmrc'
+      - '**/buildspec*.y*ml'
+      - '.gitmodules'
 ```
 
 ## Prerequisites (oidc)

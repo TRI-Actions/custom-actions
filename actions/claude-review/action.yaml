@@ -62,6 +62,12 @@ inputs:
       Repo-specific review guidance appended to the fixed prompt. Instructions to the
       model only: it cannot change tools, flags, or what the verdict means.
     default: ""
+  runner-bedrock-role-arn:
+    description: >-
+      runner only. A Bedrock-only role the runner role assumes for this run, with a
+      session policy limited to bedrock:InvokeModel* and a 15-minute session. Empty uses
+      the runner role's own credentials, which may be far broader than Bedrock.
+    default: ""
   github-token:
     description: "Token for comments; the job's GITHUB_TOKEN"
     default: ${{ github.token }}
@@ -107,7 +113,7 @@ runs:
         [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || fail "head repository '$HEAD_REPO' is not '$GITHUB_REPOSITORY'; fork PRs are not reviewed"
         [[ "$REVIEW_TYPE" =~ ^(general|security)$ ]] || fail "review-type must be general or security"
         [[ "$AWS_AUTH" =~ ^(oidc|runner)$ ]] || fail "aws-auth must be oidc or runner"
-        [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
+        [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+(:[0-9]+)?$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
         [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "account-id must be 12 digits"
         [[ "$ROLE" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || fail "invalid target-role-name"
         [[ "$FED" =~ ^[A-Za-z0-9+=,.@_-]{1,48}$ ]] || fail "invalid federated-role-name"
@@ -119,6 +125,41 @@ runs:
         else
           echo "run=true" >> "$GITHUB_OUTPUT"
         fi
+
+    # Bun runs the action, which holds the job token and the AWS session, so it is
+    # installed FIRST -- before any credential is in the environment -- and without npm.
+    # The npm `bun` package runs a postinstall script and resolves through npm config, so
+    # a PR-planted .npmrc could choose the binary, and any lifecycle script would see
+    # whatever credentials were already exported. Instead: fetch the platform tarball
+    # from the public registry, check it against the SHA-512 pinned here (the registry's
+    # own integrity value for this version), and unpack it under runner.temp. The fork's
+    # own "Install Bun" step is skipped because path_to_bun_executable is set.
+    - name: Install Bun (pinned, before credentials)
+      id: bun
+      if: steps.guard.outputs.run == 'true'
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        BUN_VERSION: "1.3.14"
+        SRI_X64: "sha512-7OVTAKvwfPmSbIV1HpdOoVVx5VRc427GuPPne93N6vk4eQBPId9nXmZDh9/zGaKPdbVjVtQSZafWQoUjx38Utw=="
+        SRI_ARM64: "sha512-X5SsPZHs+iYO8R/efIcRtc7gT2Q2DgPfliCxEkx4cXBumwkw0c/EsHMNwH3EgGpCDaZ7IYVPhpCG/xBOQHEwZw=="
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          x86_64) pkg=bun-linux-x64; want="$SRI_X64" ;;
+          aarch64|arm64) pkg=bun-linux-aarch64; want="$SRI_ARM64" ;;
+          *) echo "::error::claude-review: unsupported architecture $(uname -m)"; exit 1 ;;
+        esac
+        d="$RUNNER_TEMP/bun-$BUN_VERSION"
+        mkdir -p "$d"
+        curl -fsSL --proto '=https' -o "$d/bun.tgz" \
+          "https://registry.npmjs.org/@oven/$pkg/-/$pkg-$BUN_VERSION.tgz"
+        got="sha512-$(openssl dgst -sha512 -binary "$d/bun.tgz" | base64 | tr -d '\n')"
+        [ "$got" = "$want" ] || { echo "::error::claude-review: bun tarball hash mismatch ($got)"; exit 1; }
+        tar -xzf "$d/bun.tgz" -C "$d" package/bin/bun
+        chmod +x "$d/package/bin/bun"
+        [ "$("$d/package/bin/bun" --version)" = "$BUN_VERSION" ] || { echo "::error::claude-review: bun version mismatch"; exit 1; }
+        echo "path=$d/package/bin/bun" >> "$GITHUB_OUTPUT"
 
     # fetch-depth: 0 so origin/<base>...HEAD has a merge base; a depth-1 clone makes the
     # review read whole files instead of the change.
@@ -163,17 +204,32 @@ runs:
         role-duration-seconds: 900
         role-session-name: claude-review-${{ github.run_id }}
 
-    # The action validates that AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY are set when
-    # use_bedrock is true; it does not resolve the provider chain. On a CodeBuild runner
-    # the credentials are ambient, so make them explicit.
+    # runner: the CodeBuild runner role's credentials are ambient, and the action checks
+    # that AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY are set (it does not resolve the
+    # provider chain), so they have to be exported -- and everything after this step,
+    # Claude included, inherits them. With runner-bedrock-role-arn set, what is exported
+    # is a 15-minute session on a Bedrock-only role, further narrowed by a session policy,
+    # which gives GHES the same scoped-credential model as the oidc path. Without it, the
+    # runner role's own keys are exported and the only protection is the read-deny list.
     - name: AWS - runner credentials
       if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'runner'
       shell: bash
       env:
         REGION: ${{ inputs.region }}
+        BEDROCK_ROLE: ${{ inputs.runner-bedrock-role-arn }}
       run: |
         set -euo pipefail
-        CREDS=$(aws configure export-credentials --format process)
+        if [ -n "$BEDROCK_ROLE" ]; then
+          [[ "$BEDROCK_ROLE" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,64}$ ]] \
+            || { echo "::error::claude-review: invalid runner-bedrock-role-arn"; exit 1; }
+          POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":["arn:aws:bedrock:*:*:inference-profile/us.anthropic.*","arn:aws:bedrock:*::foundation-model/anthropic.*"]}]}'
+          CREDS=$(aws sts assume-role --role-arn "$BEDROCK_ROLE" \
+            --role-session-name "claude-review-$GITHUB_RUN_ID" --duration-seconds 900 \
+            --policy "$POLICY" --query Credentials --output json)
+        else
+          echo "::warning::claude-review: runner-bedrock-role-arn is not set, so the runner role's own credentials are exposed to the model's process. Set it to a Bedrock-only role."
+          CREDS=$(aws configure export-credentials --format process)
+        fi
         CREDS="$CREDS" python3 - <<'PY'
         import json, os
         c = json.loads(os.environ["CREDS"])
@@ -299,25 +355,17 @@ runs:
     #
     # TRI-Actions/claude-code-action is upstream v1.0.231 (cfc3eb22) plus two commits that
     # replace oven-sh/setup-bun -- not on the GHES allowlist -- with `npm i -g bun@1.3.14`.
-    # The fork's own "Install Bun" step runs `npm install -g bun` from the job's working
-    # directory, which is the PR checkout -- so a PR-planted .npmrc (registry=, or a
-    # proxy) would choose the bun binary that then runs holding the AWS session and the
-    # job token. Install it here instead, from outside the checkout and with the public
-    # registry named explicitly, and hand the path to the action so it skips its own.
-    - name: Install Bun (outside the PR checkout)
-      id: bun
-      if: steps.guard.outputs.run == 'true'
-      shell: bash
-      working-directory: ${{ runner.temp }}
-      env:
-        BUN_VERSION: "1.3.14"
-      run: |
-        set -euo pipefail
-        npm install -g --registry=https://registry.npmjs.org/ "bun@${BUN_VERSION}"
-        BUN_PATH=$(command -v bun)
-        [ "$("$BUN_PATH" --version)" = "$BUN_VERSION" ] || { echo "::error::bun version mismatch"; exit 1; }
-        echo "path=$BUN_PATH" >> "$GITHUB_OUTPUT"
-
+    # That install never runs here: Bun is installed and verified before any credential
+    # exists (see "Install Bun" above), and its path is passed in.
+    #
+    # The runner.temp deny rule is written "Read(/${{ runner.temp }}/**)". runner.temp is
+    # absolute, so this expands to "Read(//home/runner/work/_temp/**)" -- the double slash
+    # is Claude Code's syntax for an absolute path. Do not "fix" it to a single slash,
+    # which would make the rule relative to the checkout and stop matching.
+    #
+    # Credentials are 15-minute sessions, and role-chained sessions cannot be refreshed.
+    # A review that outlives them fails, and "Decide verdict" records a failed review as
+    # blocked, never clean. Keep the caller's timeout-minutes near 15.
     - name: Review
       id: claude
       if: steps.guard.outputs.run == 'true'
@@ -488,3 +536,15 @@ runs:
         PY
         gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${TARGET}" \
           -F body=@"$RUNNER_TEMP/merged.md" -q .html_url
+
+    # Credentials written to GITHUB_ENV outlive this action: every later step of the
+    # caller's job would inherit them, including its upload step. Blank them on the way
+    # out. (On a CodeBuild runner the runner role stays reachable to later steps through
+    # the container credentials endpoint; that is the runner, not this action.)
+    - name: Clear AWS credentials from the job environment
+      if: always()
+      shell: bash
+      run: |
+        for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+          echo "$v=" >> "$GITHUB_ENV"
+        done

@@ -26,6 +26,12 @@ inputs:
     default: "us.anthropic.claude-sonnet-5"
   max-turns:
     default: "30"
+  runner-bedrock-role-arn:
+    description: >-
+      runner only. A Bedrock-only role the runner role assumes for this run, with a
+      session policy limited to bedrock:InvokeModel* and a 15-minute session. Empty uses
+      the runner role's own credentials, which may be far broader than Bedrock.
+    default: ""
   github-token:
     default: ${{ github.token }}
 
@@ -47,8 +53,14 @@ runs:
       shell: bash
       env:
         EVENT: ${{ github.event_name }}
-        BODY: ${{ github.event.comment.body || github.event.issue.body }}
-        ASSOC: ${{ github.event.comment.author_association || github.event.issue.author_association }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        COMMENT_ASSOC: ${{ github.event.comment.author_association }}
+        ISSUE_BODY: ${{ github.event.issue.body }}
+        ISSUE_ASSOC: ${{ github.event.issue.author_association }}
+        ISSUE_IS_PR: ${{ github.event.issue.pull_request && 'true' || 'false' }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        GH_TOKEN: ${{ inputs.github-token }}
         AWS_AUTH: ${{ inputs.aws-auth }}
         MODEL: ${{ inputs.model }}
         ACCOUNT: ${{ inputs.account-id }}
@@ -61,14 +73,17 @@ runs:
         fail() { echo "::error::claude-mention: $*"; exit 1; }
         skip() { echo "skipping: $*"; echo "run=false" >> "$GITHUB_OUTPUT"; exit 0; }
         [[ "$AWS_AUTH" =~ ^(oidc|runner)$ ]] || fail "aws-auth must be oidc or runner"
-        [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
+        [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+(:[0-9]+)?$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
         [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "account-id must be 12 digits"
         [[ "$ROLE" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || fail "invalid target-role-name"
         [[ "$FED" =~ ^[A-Za-z0-9+=,.@_-]{1,48}$ ]] || fail "invalid federated-role-name"
         [[ "$REGION" =~ ^us-(east|west)-[12]$ ]] || fail "region must be a US region"
         [[ "$TURNS" =~ ^[0-9]{1,3}$ ]] || fail "max-turns must be a number"
+        # Body and association come from the same object for each event, so a comment
+        # can never be paired with the issue's text or the issue author's association.
         case "$EVENT" in
-          issue_comment|pull_request_review_comment|issues) ;;
+          issue_comment|pull_request_review_comment) BODY="$COMMENT_BODY"; ASSOC="$COMMENT_ASSOC" ;;
+          issues) BODY="$ISSUE_BODY"; ASSOC="$ISSUE_ASSOC" ;;
           *) fail "runs on issue_comment, pull_request_review_comment or issues (got '$EVENT')" ;;
         esac
         case "$BODY" in *@claude*) ;; *) skip "no @claude mention" ;; esac
@@ -76,7 +91,58 @@ runs:
           OWNER|MEMBER|COLLABORATOR) ;;
           *) skip "author association '$ASSOC' may not trigger Claude" ;;
         esac
+        # Same-repo PRs only, as in claude-review. On a PR the action checks out the PR's
+        # code, so a member commenting on a fork PR would put fork-controlled files in
+        # front of the model while it holds this job's credentials. issue_comment carries
+        # no head repo, so it is read from the API; a missing head repo (a deleted fork)
+        # fails closed.
+        if [ "$EVENT" = "pull_request_review_comment" ]; then
+          head="$HEAD_REPO"
+        elif [ "$EVENT" = "issue_comment" ] && [ "$ISSUE_IS_PR" = "true" ]; then
+          export GH_HOST="${GITHUB_SERVER_URL#https://}"
+          [ "$GH_HOST" = "github.com" ] || export GH_ENTERPRISE_TOKEN="$GH_TOKEN"
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name // ""') \
+            || fail "could not read pull request #${PR_NUMBER}"
+        else
+          head="$GITHUB_REPOSITORY"
+        fi
+        [ "$head" = "$GITHUB_REPOSITORY" ] || fail "head repository '${head:-<none>}' is not '$GITHUB_REPOSITORY'; fork PRs are not answered"
         echo "run=true" >> "$GITHUB_OUTPUT"
+
+    # Bun runs the action, which holds the job token and the AWS session, so it is
+    # installed FIRST -- before any credential is in the environment -- and without npm.
+    # The npm `bun` package runs a postinstall script and resolves through npm config, so
+    # a PR-planted .npmrc could choose the binary, and any lifecycle script would see
+    # whatever credentials were already exported. Instead: fetch the platform tarball
+    # from the public registry, check it against the SHA-512 pinned here (the registry's
+    # own integrity value for this version), and unpack it under runner.temp. The fork's
+    # own "Install Bun" step is skipped because path_to_bun_executable is set.
+    - name: Install Bun (pinned, before credentials)
+      id: bun
+      if: steps.guard.outputs.run == 'true'
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        BUN_VERSION: "1.3.14"
+        SRI_X64: "sha512-7OVTAKvwfPmSbIV1HpdOoVVx5VRc427GuPPne93N6vk4eQBPId9nXmZDh9/zGaKPdbVjVtQSZafWQoUjx38Utw=="
+        SRI_ARM64: "sha512-X5SsPZHs+iYO8R/efIcRtc7gT2Q2DgPfliCxEkx4cXBumwkw0c/EsHMNwH3EgGpCDaZ7IYVPhpCG/xBOQHEwZw=="
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          x86_64) pkg=bun-linux-x64; want="$SRI_X64" ;;
+          aarch64|arm64) pkg=bun-linux-aarch64; want="$SRI_ARM64" ;;
+          *) echo "::error::claude-mention: unsupported architecture $(uname -m)"; exit 1 ;;
+        esac
+        d="$RUNNER_TEMP/bun-$BUN_VERSION"
+        mkdir -p "$d"
+        curl -fsSL --proto '=https' -o "$d/bun.tgz" \
+          "https://registry.npmjs.org/@oven/$pkg/-/$pkg-$BUN_VERSION.tgz"
+        got="sha512-$(openssl dgst -sha512 -binary "$d/bun.tgz" | base64 | tr -d '\n')"
+        [ "$got" = "$want" ] || { echo "::error::claude-mention: bun tarball hash mismatch ($got)"; exit 1; }
+        tar -xzf "$d/bun.tgz" -C "$d" package/bin/bun
+        chmod +x "$d/package/bin/bun"
+        [ "$("$d/package/bin/bun" --version)" = "$BUN_VERSION" ] || { echo "::error::claude-mention: bun version mismatch"; exit 1; }
+        echo "path=$d/package/bin/bun" >> "$GITHUB_OUTPUT"
 
     - name: Check out repository code
       if: steps.guard.outputs.run == 'true'
@@ -113,9 +179,20 @@ runs:
       shell: bash
       env:
         REGION: ${{ inputs.region }}
+        BEDROCK_ROLE: ${{ inputs.runner-bedrock-role-arn }}
       run: |
         set -euo pipefail
-        CREDS=$(aws configure export-credentials --format process)
+        if [ -n "$BEDROCK_ROLE" ]; then
+          [[ "$BEDROCK_ROLE" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,64}$ ]] \
+            || { echo "::error::claude-mention: invalid runner-bedrock-role-arn"; exit 1; }
+          POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":["arn:aws:bedrock:*:*:inference-profile/us.anthropic.*","arn:aws:bedrock:*::foundation-model/anthropic.*"]}]}'
+          CREDS=$(aws sts assume-role --role-arn "$BEDROCK_ROLE" \
+            --role-session-name "claude-mention-$GITHUB_RUN_ID" --duration-seconds 900 \
+            --policy "$POLICY" --query Credentials --output json)
+        else
+          echo "::warning::claude-mention: runner-bedrock-role-arn is not set, so the runner role's own credentials are exposed to the model's process. Set it to a Bedrock-only role."
+          CREDS=$(aws configure export-credentials --format process)
+        fi
         CREDS="$CREDS" python3 - <<'PY'
         import json, os
         c = json.loads(os.environ["CREDS"])
@@ -133,26 +210,8 @@ runs:
         PY
         echo "AWS_REGION=$REGION" >> "$GITHUB_ENV"
 
-    # No prompt: the action's normal @claude behaviour answers the comment.
-    # The fork's own "Install Bun" step runs `npm install -g bun` from the job's working
-    # directory, which is the PR checkout -- so a PR-planted .npmrc (registry=, or a
-    # proxy) would choose the bun binary that then runs holding the AWS session and the
-    # job token. Install it here instead, from outside the checkout and with the public
-    # registry named explicitly, and hand the path to the action so it skips its own.
-    - name: Install Bun (outside the PR checkout)
-      id: bun
-      if: steps.guard.outputs.run == 'true'
-      shell: bash
-      working-directory: ${{ runner.temp }}
-      env:
-        BUN_VERSION: "1.3.14"
-      run: |
-        set -euo pipefail
-        npm install -g --registry=https://registry.npmjs.org/ "bun@${BUN_VERSION}"
-        BUN_PATH=$(command -v bun)
-        [ "$("$BUN_PATH" --version)" = "$BUN_VERSION" ] || { echo "::error::bun version mismatch"; exit 1; }
-        echo "path=$BUN_PATH" >> "$GITHUB_OUTPUT"
-
+    # No prompt: the action's normal @claude behaviour answers the comment. Deny rules,
+    # including the double-slash runner.temp rule, are explained in claude-review.
     - name: Answer
       if: steps.guard.outputs.run == 'true'
       uses: TRI-Actions/claude-code-action@555a37826cd295d7dae6509760402dccb114f414 # v1.0.231 + TRI bun patch
@@ -168,3 +227,15 @@ runs:
           --strict-mcp-config
           --allowedTools "mcp__github_inline_comment__create_inline_comment"
           --disallowedTools "Bash" "WebFetch" "WebSearch" "Read(//proc/**)" "Read(/${{ runner.temp }}/**)" "Read(./.git/**)" "Read(//**/.git/config)"
+
+    # Credentials written to GITHUB_ENV outlive this action: every later step of the
+    # caller's job would inherit them, including its upload step. Blank them on the way
+    # out. (On a CodeBuild runner the runner role stays reachable to later steps through
+    # the container credentials endpoint; that is the runner, not this action.)
+    - name: Clear AWS credentials from the job environment
+      if: always()
+      shell: bash
+      run: |
+        for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+          echo "$v=" >> "$GITHUB_ENV"
+        done
