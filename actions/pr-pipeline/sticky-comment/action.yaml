@@ -1,0 +1,64 @@
+name: 'pr-pipeline/sticky-comment'
+description: 'Creates, updates, recreates or deletes a PR comment identified by a hidden key marker'
+
+inputs:
+  github-token:
+    description: 'GitHub token with pull-requests write permission'
+    required: false
+    default: ${{ github.token }}
+  pr-number:
+    description: 'Pull request number'
+    required: true
+  key:
+    description: 'Comment key, must match ^[a-z0-9][a-z0-9:._-]*$ (e.g. plan:infra)'
+    required: true
+  body:
+    description: 'Comment body (Markdown). Required unless body-file is set or mode is delete. Use body-file for large output'
+    required: false
+    default: ''
+  body-file:
+    description: 'Path to a file with the comment body, relative to the workspace. Takes precedence over body'
+    required: false
+    default: ''
+  mode:
+    description: 'upsert (update the existing comment or create one), recreate (delete and post a new comment) or delete'
+    required: false
+    default: 'upsert'
+  max-length:
+    description: 'Maximum comment length; longer bodies are cut from the middle with a link to the workflow run'
+    required: false
+    default: '60000'
+  comment-author:
+    description: 'Login that posts with github-token; only its comments are matched (case-insensitive). If github-token is a PAT, set this to the PAT user login; for a GitHub App token, <app-slug>[bot]. * matches any author'
+    required: false
+    default: 'github-actions[bot]'
+
+outputs:
+  comment-id:
+    description: 'ID of the created or updated comment (empty for mode delete)'
+    value: ${{ steps.run.outputs.comment-id }}
+  comment-url:
+    description: 'URL of the created or updated comment (empty for mode delete)'
+    value: ${{ steps.run.outputs.comment-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      if: ${{ always() }}
+      uses: actions/github-script@v7
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PRP_PR_NUMBER: ${{ inputs.pr-number }}
+        PRP_KEY: ${{ inputs.key }}
+        PRP_BODY: ${{ inputs.body }}
+        PRP_BODY_FILE: ${{ inputs.body-file }}
+        PRP_MODE: ${{ inputs.mode }}
+        PRP_MAX_LENGTH: ${{ inputs.max-length }}
+        PRP_COMMENT_AUTHOR: ${{ inputs.comment-author }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('path');
+          const mod = require(path.join(process.env.ACTION_PATH, '..', 'lib', 'comments.js'));
+          await mod.run({ github, context, core, env: process.env });

@@ -1,0 +1,71 @@
+name: 'pr-pipeline/pr-context'
+description: 'Resolves the pull request for a pull_request, pull_request_target or issue_comment event and optionally checks out its head commit'
+
+inputs:
+  github-token:
+    description: 'GitHub token with pull-requests: read permission'
+    required: false
+    default: ${{ github.token }}
+  sha:
+    description: 'Full commit SHA to use instead of the pull request head SHA'
+    required: false
+    default: ''
+  checkout:
+    description: 'Check out the head SHA with actions/checkout (true/false). Pull requests from forks are refused when true'
+    required: false
+    default: 'true'
+  fetch-depth:
+    description: 'fetch-depth passed to actions/checkout. 0 fetches full history'
+    required: false
+    default: '0'
+
+outputs:
+  pr-number:
+    description: 'Pull request number'
+    value: ${{ steps.run.outputs.pr-number }}
+  head-sha:
+    description: 'Head commit SHA (the sha input when given)'
+    value: ${{ steps.run.outputs.head-sha }}
+  head-ref:
+    description: 'Head branch name'
+    value: ${{ steps.run.outputs.head-ref }}
+  base-ref:
+    description: 'Base branch name'
+    value: ${{ steps.run.outputs.base-ref }}
+  base-sha:
+    description: 'Base commit SHA as recorded on the pull request'
+    value: ${{ steps.run.outputs.base-sha }}
+  state:
+    description: 'Pull request state (open/closed)'
+    value: ${{ steps.run.outputs.state }}
+  merged:
+    description: 'Whether the pull request is merged (true/false)'
+    value: ${{ steps.run.outputs.merged }}
+  author:
+    description: 'Login of the pull request author'
+    value: ${{ steps.run.outputs.author }}
+  is-fork:
+    description: 'Whether the head branch lives outside this repository, including a deleted head repository (true/false)'
+    value: ${{ steps.run.outputs.is-fork }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: actions/github-script@v7
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PRP_SHA: ${{ inputs.sha }}
+        PRP_CHECKOUT: ${{ inputs.checkout }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('path');
+          const mod = require(path.join(process.env.ACTION_PATH, '..', 'lib', 'context.js'));
+          await mod.run({ github, context, core, env: process.env });
+
+    - if: inputs.checkout == 'true'
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ steps.run.outputs.head-sha }}
+        fetch-depth: ${{ inputs.fetch-depth }}
