@@ -1,0 +1,54 @@
+name: 'pr-pipeline/branch-freshness'
+description: 'Reports whether the base branch changed the given paths since the checked-out HEAD branched off it'
+
+inputs:
+  github-token:
+    description: 'GitHub token passed to actions/github-script (no API calls are made)'
+    required: false
+    default: ${{ github.token }}
+  base-ref:
+    description: 'Base branch name, e.g. main'
+    required: true
+  paths:
+    description: 'Newline or whitespace separated git pathspecs to compare, e.g. 123456789012/ shared/ Pipfile'
+    required: true
+  remote:
+    description: 'Git remote to compare against'
+    required: false
+    default: 'origin'
+  fetch:
+    description: 'Fetch the base branch from the remote first (true/false)'
+    required: false
+    default: 'true'
+
+outputs:
+  stale:
+    description: 'Whether the base branch changed any of the paths after the merge base (true/false)'
+    value: ${{ steps.run.outputs.stale }}
+  changed-paths:
+    description: 'Newline separated files changed on the base branch, at most 50 followed by an "... and N more" line'
+    value: ${{ steps.run.outputs.changed-paths }}
+  merge-base:
+    description: 'Merge base of HEAD and the base branch'
+    value: ${{ steps.run.outputs.merge-base }}
+  base-sha:
+    description: 'Commit SHA of the base branch that was compared'
+    value: ${{ steps.run.outputs.base-sha }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: actions/github-script@v7
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PRP_BASE_REF: ${{ inputs.base-ref }}
+        PRP_PATHS: ${{ inputs.paths }}
+        PRP_REMOTE: ${{ inputs.remote }}
+        PRP_FETCH: ${{ inputs.fetch }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('path');
+          const mod = require(path.join(process.env.ACTION_PATH, '..', 'lib', 'freshness.js'));
+          await mod.run({ github, context, core, env: process.env });

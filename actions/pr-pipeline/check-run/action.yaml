@@ -1,0 +1,72 @@
+name: 'pr-pipeline/check-run'
+description: 'Starts (in_progress) or finishes (completed) a GitHub check run on a commit'
+
+inputs:
+  github-token:
+    description: 'GitHub token with checks: write permission'
+    required: false
+    default: ${{ github.token }}
+  mode:
+    description: 'start (create an in_progress check run) or finish (complete it)'
+    required: true
+  name:
+    description: 'Check run name (start)'
+    required: false
+    default: ''
+  sha:
+    description: 'Commit SHA to attach the check run to (start)'
+    required: false
+    default: ''
+  external-id:
+    description: 'Optional external id stored on the check run, e.g. a stack or workspace name (start)'
+    required: false
+    default: ''
+  title:
+    description: 'Output title. On start, output is only set when a title is given; on finish it defaults to the conclusion'
+    required: false
+    default: ''
+  summary:
+    description: 'Output summary (Markdown). Truncated to the 65535 GitHub limit'
+    required: false
+    default: ''
+  summary-file:
+    description: 'Path to a file, relative to the workspace, whose content is used as the summary instead of "summary" (finish)'
+    required: false
+    default: ''
+  id:
+    description: 'Check run id returned by the start step (finish). Empty means start was skipped; the step then does nothing'
+    required: false
+    default: ''
+  conclusion:
+    description: 'success, failure, neutral, cancelled, skipped, timed_out or action_required (finish)'
+    required: false
+    default: ''
+
+outputs:
+  id:
+    description: 'Check run id (created on start, completed on finish)'
+    value: ${{ steps.run.outputs.id }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      if: ${{ always() }}
+      uses: actions/github-script@v7
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PRP_MODE: ${{ inputs.mode }}
+        PRP_NAME: ${{ inputs.name }}
+        PRP_SHA: ${{ inputs.sha }}
+        PRP_EXTERNAL_ID: ${{ inputs.external-id }}
+        PRP_TITLE: ${{ inputs.title }}
+        PRP_SUMMARY: ${{ inputs.summary }}
+        PRP_SUMMARY_FILE: ${{ inputs.summary-file }}
+        PRP_ID: ${{ inputs.id }}
+        PRP_CONCLUSION: ${{ inputs.conclusion }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('path');
+          const mod = require(path.join(process.env.ACTION_PATH, '..', 'lib', 'checks.js'));
+          await mod.run({ github, context, core, env: process.env });

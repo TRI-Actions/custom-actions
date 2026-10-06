@@ -1,0 +1,50 @@
+name: 'pr-pipeline/plan-gate'
+description: 'Checks that the latest plan check run for each external id succeeded on a commit'
+
+inputs:
+  github-token:
+    description: 'GitHub token with checks: read permission'
+    required: false
+    default: ${{ github.token }}
+  sha:
+    description: 'Full 40-character commit SHA whose plan check runs are evaluated'
+    required: true
+  check-name:
+    description: 'Name of the plan check run'
+    required: true
+  external-ids:
+    description: 'Whitespace-separated external ids that each need a successful plan, or "*" alone to match by check name only'
+    required: true
+  not-after:
+    description: 'ISO 8601 timestamp with a time zone, usually github.event.comment.created_at; when set, each newest plan must have completed at or before it'
+    required: false
+    default: ''
+
+outputs:
+  passed:
+    description: 'true when every required plan succeeded, otherwise false'
+    value: ${{ steps.run.outputs.passed }}
+  reason:
+    description: 'Why the gate did not pass (empty when passed)'
+    value: ${{ steps.run.outputs.reason }}
+  check-url:
+    description: 'URL of the blocking check run, or of the first passing one'
+    value: ${{ steps.run.outputs.check-url }}
+
+runs:
+  using: composite
+  steps:
+    - id: run
+      uses: actions/github-script@v7
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        PRP_SHA: ${{ inputs.sha }}
+        PRP_CHECK_NAME: ${{ inputs.check-name }}
+        PRP_EXTERNAL_IDS: ${{ inputs.external-ids }}
+        PRP_NOT_AFTER: ${{ inputs.not-after }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const path = require('path');
+          const mod = require(path.join(process.env.ACTION_PATH, '..', 'lib', 'plan-gate.js'));
+          await mod.run({ github, context, core, env: process.env });
