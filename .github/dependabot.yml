@@ -1,0 +1,14 @@
+# Proposes SHA bumps for the actions pinned inside claude-review and claude-mention.
+# Pins stay full commit SHAs; Dependabot updates the SHA and the version comment, and
+# every bump is a reviewed PR. Scoped to these two actions only.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /actions/claude-review
+      - /actions/claude-mention
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps(claude)"

@@ -1,0 +1,305 @@
+name: "Claude Mention"
+description: "Hardened `@claude` responder on issues and PR comments, Bedrock-backed, answer-only"
+
+# Answers `@claude <question>`. No repository write access, no Bash. Callers pin by SHA:
+#   uses: TRI-Actions/custom-actions/actions/claude-mention@<sha>
+#
+# Shares the hardening and allowlist constraints of ../claude-review/action.yaml; see the
+# comments there. The differences are the trigger and the author gate.
+#
+# Caller job permissions: contents: read, pull-requests: write, issues: write, and
+# id-token: write for oidc.
+
+inputs:
+  aws-auth:
+    description: "`oidc` (github.com) or `runner` (GHES CodeBuild runner role)"
+    default: "oidc"
+  account-id:
+    default: "550939891544"
+  target-role-name:
+    default: "ClaudeCodeBedrockGHA"
+  federated-role-name:
+    description: "Federated role base name (oidc). Defaults to the Claude-only role."
+    default: "GHAFederatedRole-Claude"
+  allow-shared-federated-role:
+    description: "oidc only. \"true\" permits the shared GHAFederatedRole; see claude-review."
+    default: "false"
+  region:
+    default: "us-west-2"
+  model:
+    default: "us.anthropic.claude-sonnet-5"
+  max-turns:
+    default: "30"
+  runner-bedrock-role-arn:
+    description: >-
+      runner only. A Bedrock-only role the runner role assumes for this run, with a
+      session policy limited to bedrock:InvokeModel* and a 15-minute session. Required
+      for runner unless allow-runner-credentials is "true".
+    default: ""
+  allow-runner-credentials:
+    description: >-
+      runner only. "true" lets the run proceed without runner-bedrock-role-arn, exporting
+      the runner role's own credentials -- which may be far broader than Bedrock -- into
+      the model's process. A temporary, visible opt-in until the Bedrock-only role exists.
+    default: "false"
+  github-token:
+    description: "Must be the job's own GITHUB_TOKEN; personal access tokens are rejected"
+    default: ${{ github.token }}
+
+outputs:
+  ran:
+    description: "`true` if Claude answered; `false` if the event did not qualify"
+    value: ${{ steps.guard.outputs.run }}
+
+runs:
+  using: "composite"
+  steps:
+    # The author gate. Without it anyone who can comment -- on an internal repo, the
+    # whole enterprise -- spends Bedrock budget and feeds the model arbitrary input while
+    # it holds this job's token. author_association is GitHub's, not the commenter's.
+    # A non-qualifying event is a quiet skip rather than a failure: it is the normal case
+    # for most comments, and a red check on every comment would be noise.
+    - name: Guard
+      id: guard
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        COMMENT_BODY: ${{ github.event.comment.body }}
+        COMMENT_ASSOC: ${{ github.event.comment.author_association }}
+        ISSUE_BODY: ${{ github.event.issue.body }}
+        ISSUE_ASSOC: ${{ github.event.issue.author_association }}
+        ISSUE_IS_PR: ${{ github.event.issue.pull_request && 'true' || 'false' }}
+        PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+        HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        TOKEN: ${{ inputs.github-token }}
+        ALLOW_SHARED_FED: ${{ inputs.allow-shared-federated-role }}
+        AWS_AUTH: ${{ inputs.aws-auth }}
+        MODEL: ${{ inputs.model }}
+        ACCOUNT: ${{ inputs.account-id }}
+        ROLE: ${{ inputs.target-role-name }}
+        FED: ${{ inputs.federated-role-name }}
+        REGION: ${{ inputs.region }}
+        TURNS: ${{ inputs.max-turns }}
+      run: |
+        set -euo pipefail
+        fail() { echo "::error::claude-mention: $*"; exit 1; }
+        skip() { echo "skipping: $*"; echo "run=false" >> "$GITHUB_OUTPUT"; exit 0; }
+        [[ "$AWS_AUTH" =~ ^(oidc|runner)$ ]] || fail "aws-auth must be oidc or runner"
+        [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+(:[0-9]+)?$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
+        [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "account-id must be 12 digits"
+        [[ "$ROLE" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || fail "invalid target-role-name"
+        [[ "$FED" =~ ^[A-Za-z0-9+=,.@_-]{1,48}$ ]] || fail "invalid federated-role-name"
+        # The shared federated role reaches every OIDC role in its account, not just
+        # Bedrock; a caller lands on it only by saying so.
+        if [ "$AWS_AUTH" = "oidc" ] && [ "$FED" = "GHAFederatedRole" ] && [ "$ALLOW_SHARED_FED" != "true" ]; then
+          fail "federated-role-name GHAFederatedRole is the account's shared federated role, which can reach more than Bedrock. Use the Claude-only role (the default), or set allow-shared-federated-role: \"true\" to accept it."
+        fi
+        [[ "$REGION" =~ ^us-(east|west)-[12]$ ]] || fail "region must be a US region"
+        [[ "$TURNS" =~ ^[0-9]{1,3}$ ]] || fail "max-turns must be a number"
+        # The job token only. A personal access token acts as a person across every repo
+        # they can reach and outlives the job; it would sit in .git/config next to the
+        # model and back its one write tool. App installation tokens share the ghs_
+        # prefix with the job token and cannot be told apart here.
+        case "$TOKEN" in
+          ghp_*|github_pat_*|gho_*|ghu_*) fail "github-token must be the job's GITHUB_TOKEN, not a personal or OAuth token" ;;
+        esac
+        # Body and association come from the same object for each event, so a comment
+        # can never be paired with the issue's text or the issue author's association.
+        case "$EVENT" in
+          issue_comment|pull_request_review_comment) BODY="$COMMENT_BODY"; ASSOC="$COMMENT_ASSOC" ;;
+          issues) BODY="$ISSUE_BODY"; ASSOC="$ISSUE_ASSOC" ;;
+          *) fail "runs on issue_comment, pull_request_review_comment or issues (got '$EVENT')" ;;
+        esac
+        case "$BODY" in *@claude*) ;; *) skip "no @claude mention" ;; esac
+        case "$ASSOC" in
+          OWNER|MEMBER|COLLABORATOR) ;;
+          *) skip "author association '$ASSOC' may not trigger Claude" ;;
+        esac
+        # Same-repo PRs only, as in claude-review. On a PR the action checks out the PR's
+        # code, so a member commenting on a fork PR would put fork-controlled files in
+        # front of the model while it holds this job's credentials. issue_comment carries
+        # no head repo, so it is read from the API; a missing head repo (a deleted fork)
+        # fails closed.
+        if [ "$EVENT" = "pull_request_review_comment" ]; then
+          head="$HEAD_REPO"
+        elif [ "$EVENT" = "issue_comment" ] && [ "$ISSUE_IS_PR" = "true" ]; then
+          export GH_HOST="${GITHUB_SERVER_URL#https://}"
+          [ "$GH_HOST" = "github.com" ] || export GH_ENTERPRISE_TOKEN="$GH_TOKEN"
+          head=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name // ""') \
+            || fail "could not read pull request #${PR_NUMBER}"
+        else
+          head="$GITHUB_REPOSITORY"
+        fi
+        [ "$head" = "$GITHUB_REPOSITORY" ] || fail "head repository '${head:-<none>}' is not '$GITHUB_REPOSITORY'; fork PRs are not answered"
+        echo "run=true" >> "$GITHUB_OUTPUT"
+
+    # Bun runs the action, which holds the job token and the AWS session, so it is
+    # installed FIRST -- before any credential is in the environment -- and without npm.
+    # The npm `bun` package runs a postinstall script and resolves through npm config, so
+    # a PR-planted .npmrc could choose the binary, and any lifecycle script would see
+    # whatever credentials were already exported. Instead: fetch the platform tarball
+    # from the public registry, check it against the SHA-512 pinned here (the registry's
+    # own integrity value for this version), and unpack it under runner.temp. The fork's
+    # own "Install Bun" step is skipped because path_to_bun_executable is set.
+    - name: Install Bun (pinned, before credentials)
+      id: bun
+      if: steps.guard.outputs.run == 'true'
+      shell: bash
+      working-directory: ${{ runner.temp }}
+      env:
+        BUN_VERSION: "1.3.14"
+        SRI_X64: "sha512-7OVTAKvwfPmSbIV1HpdOoVVx5VRc427GuPPne93N6vk4eQBPId9nXmZDh9/zGaKPdbVjVtQSZafWQoUjx38Utw=="
+        SRI_ARM64: "sha512-X5SsPZHs+iYO8R/efIcRtc7gT2Q2DgPfliCxEkx4cXBumwkw0c/EsHMNwH3EgGpCDaZ7IYVPhpCG/xBOQHEwZw=="
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          x86_64) pkg=bun-linux-x64; want="$SRI_X64" ;;
+          aarch64|arm64) pkg=bun-linux-aarch64; want="$SRI_ARM64" ;;
+          *) echo "::error::claude-mention: unsupported architecture $(uname -m)"; exit 1 ;;
+        esac
+        d="$RUNNER_TEMP/bun-$BUN_VERSION"
+        mkdir -p "$d"
+        curl -fsSL --proto '=https' -o "$d/bun.tgz" \
+          "https://registry.npmjs.org/@oven/$pkg/-/$pkg-$BUN_VERSION.tgz"
+        got="sha512-$(openssl dgst -sha512 -binary "$d/bun.tgz" | base64 | tr -d '\n')"
+        [ "$got" = "$want" ] || { echo "::error::claude-mention: bun tarball hash mismatch ($got)"; exit 1; }
+        tar -xzf "$d/bun.tgz" -C "$d" package/bin/bun
+        chmod +x "$d/package/bin/bun"
+        [ "$("$d/package/bin/bun" --version)" = "$BUN_VERSION" ] || { echo "::error::claude-mention: bun version mismatch"; exit 1; }
+        echo "path=$d/package/bin/bun" >> "$GITHUB_OUTPUT"
+
+    # Answer-only, so no history is needed: depth 1. persist-credentials: false -- the
+    # fork authenticates git itself, before it fetches the PR branch, through a
+    # credential helper that keeps the token out of the working tree.
+    - name: Check out repository code
+      if: steps.guard.outputs.run == 'true'
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      with:
+        fetch-depth: 1
+        persist-credentials: false
+        token: ${{ inputs.github-token }}
+
+    - name: AWS - federated role (OIDC)
+      if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc'
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      with:
+        role-to-assume: arn:aws:iam::371027173325:role/${{ inputs.federated-role-name }}-${{ inputs.account-id }}
+        aws-region: ${{ inputs.region }}
+        role-duration-seconds: 900
+        role-session-name: claude-mention-${{ github.run_id }}
+
+    - name: AWS - Bedrock role
+      if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc'
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.account-id }}:role/${{ inputs.target-role-name }}
+        role-chaining: true
+        # configure-aws-credentials session-tags by default, and the Bedrock role's trust
+        # policy grants sts:AssumeRole only, not sts:TagSession. Without this the hop
+        # fails after 12 retries (claude-code-example run 37349772701).
+        role-skip-session-tagging: true
+        aws-region: ${{ inputs.region }}
+        role-duration-seconds: 900
+        role-session-name: claude-mention-${{ github.run_id }}
+
+    - name: AWS - runner credentials
+      if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'runner'
+      shell: bash
+      env:
+        REGION: ${{ inputs.region }}
+        BEDROCK_ROLE: ${{ inputs.runner-bedrock-role-arn }}
+        ALLOW_RUNNER: ${{ inputs.allow-runner-credentials }}
+      run: |
+        set -euo pipefail
+        if [ -n "$BEDROCK_ROLE" ]; then
+          [[ "$BEDROCK_ROLE" =~ ^arn:aws:iam::[0-9]{12}:role/[A-Za-z0-9+=,.@_/-]{1,64}$ ]] \
+            || { echo "::error::claude-mention: invalid runner-bedrock-role-arn"; exit 1; }
+          POLICY='{"Version":"2012-10-17","Statement":[{"Effect":"Allow","Action":["bedrock:InvokeModel","bedrock:InvokeModelWithResponseStream"],"Resource":["arn:aws:bedrock:*:*:inference-profile/us.anthropic.*","arn:aws:bedrock:*::foundation-model/anthropic.*"]}]}'
+          CREDS=$(aws sts assume-role --role-arn "$BEDROCK_ROLE" \
+            --role-session-name "claude-mention-$GITHUB_RUN_ID" --duration-seconds 900 \
+            --policy "$POLICY" --query Credentials --output json)
+        elif [ "$ALLOW_RUNNER" = "true" ]; then
+          echo "::warning::claude-mention: allow-runner-credentials is true, so the runner role's own credentials are exposed to the model's process. Set runner-bedrock-role-arn to a Bedrock-only role and remove the opt-in."
+          CREDS=$(aws configure export-credentials --format process)
+        else
+          # Fail closed: exposing the runner role is a choice the caller makes visibly,
+          # never a default.
+          echo "::error::claude-mention: aws-auth is runner but runner-bedrock-role-arn is empty. Set it to a Bedrock-only role, or set allow-runner-credentials: \"true\" to accept exposing the runner role's own credentials."
+          exit 1
+        fi
+        CREDS="$CREDS" python3 - <<'PY'
+        import json, os
+        c = json.loads(os.environ["CREDS"])
+        for k in ("AccessKeyId", "SecretAccessKey", "SessionToken"):
+            if c.get(k):
+                print(f"::add-mask::{c[k]}")
+        PY
+        CREDS="$CREDS" python3 - <<'PY' >> "$GITHUB_ENV"
+        import json, os
+        c = json.loads(os.environ["CREDS"])
+        print(f"AWS_ACCESS_KEY_ID={c['AccessKeyId']}")
+        print(f"AWS_SECRET_ACCESS_KEY={c['SecretAccessKey']}")
+        if c.get("SessionToken"):
+            print(f"AWS_SESSION_TOKEN={c['SessionToken']}")
+        PY
+        echo "AWS_REGION=$REGION" >> "$GITHUB_ENV"
+
+    # Stop if the credentials are not the role this run was meant to have: a chain that
+    # lands somewhere unexpected (a wrong default, a misconfigured trust) must not reach
+    # the model. The assumed-role ARN names the role, never its path.
+    - name: Verify credentials
+      if: steps.guard.outputs.run == 'true'
+      shell: bash
+      env:
+        AWS_AUTH: ${{ inputs.aws-auth }}
+        TARGET_ROLE: ${{ inputs.target-role-name }}
+        BEDROCK_ROLE: ${{ inputs.runner-bedrock-role-arn }}
+      run: |
+        set -euo pipefail
+        ARN=$(aws sts get-caller-identity --query Arn --output text)
+        echo "caller: $ARN"
+        if [ "$AWS_AUTH" = "oidc" ]; then
+          EXPECTED="$TARGET_ROLE"
+        elif [ -n "$BEDROCK_ROLE" ]; then
+          EXPECTED="${BEDROCK_ROLE##*/}"
+        else
+          EXPECTED=""   # allow-runner-credentials: the runner role, whatever it is called
+        fi
+        if [ -n "$EXPECTED" ]; then
+          case "$ARN" in
+            *":assumed-role/${EXPECTED}/"*) ;;
+            *) echo "::error::claude-mention: caller is $ARN, expected role $EXPECTED"; exit 1 ;;
+          esac
+        fi
+
+    # No prompt: the action's normal @claude behaviour answers the comment. Deny rules,
+    # including the double-slash runner.temp rule, and the CLAUDE.md restore the fork
+    # performs on PRs, are explained in claude-review.
+    - name: Answer
+      if: steps.guard.outputs.run == 'true'
+      uses: TRI-Actions/claude-code-action@3527f5ded7c4a7cdc864ecdfd13d8037fff5d7ed # v1.0.231 + TRI patches (claude-code-action#1)
+      with:
+        github_token: ${{ inputs.github-token }}
+        use_bedrock: "true"
+        path_to_bun_executable: ${{ steps.bun.outputs.path }}
+        claude_args: |
+          --model ${{ inputs.model }}
+          --max-turns ${{ inputs.max-turns }}
+          --restricted
+          --setting-sources user
+          --strict-mcp-config
+          --allowedTools "mcp__github_inline_comment__create_inline_comment"
+          --disallowedTools "Bash" "WebFetch" "WebSearch" "Write" "Edit" "MultiEdit" "NotebookEdit" "Agent" "Read(//proc/**)" "Read(/${{ runner.temp }}/**)" "Read(./.git/**)" "Read(//**/.git/config)"
+
+    # Credentials written to GITHUB_ENV outlive this action: every later step of the
+    # caller's job would inherit them, including its upload step. Blank them on the way
+    # out. (On a CodeBuild runner the runner role stays reachable to later steps through
+    # the container credentials endpoint; that is the runner, not this action.)
+    - name: Clear AWS credentials from the job environment
+      if: always()
+      shell: bash
+      run: |
+        for v in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN; do
+          echo "$v=" >> "$GITHUB_ENV"
+        done
