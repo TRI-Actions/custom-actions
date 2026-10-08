@@ -14,8 +14,10 @@ description: "Hardened, review-only Claude Code PR review on Bedrock (github.com
 # not even on a step that would be skipped.
 #
 # The hardening is in this file and is not exposed as inputs: a caller chooses the
-# account, the role, the model and a prompt addendum. It cannot give the reviewer Bash,
-# load repo settings, or let it read the runner's credentials.
+# account, the role and the model. It cannot give the reviewer Bash, load repo
+# settings, or let it read the runner's credentials. Repo-specific guidance comes from
+# .github/claude-review.md on the DEFAULT branch, read through the API -- never from
+# the caller's inputs or the checkout, both of which the PR controls.
 # ─────────────────────────────────────────────────────────────────────────────────────
 #
 # ─── WHAT THE CALLER OWNS ────────────────────────────────────────────────────────────
@@ -57,19 +59,22 @@ inputs:
   max-turns:
     description: "Turn cap for the review"
     default: "30"
-  prompt-addendum:
-    description: >-
-      Repo-specific review guidance appended to the fixed prompt. Instructions to the
-      model only: it cannot change tools, flags, or what the verdict means.
-    default: ""
   runner-bedrock-role-arn:
     description: >-
       runner only. A Bedrock-only role the runner role assumes for this run, with a
-      session policy limited to bedrock:InvokeModel* and a 15-minute session. Empty uses
-      the runner role's own credentials, which may be far broader than Bedrock.
+      session policy limited to bedrock:InvokeModel* and a 15-minute session. Required
+      for runner unless allow-runner-credentials is "true".
     default: ""
+  allow-runner-credentials:
+    description: >-
+      runner only. "true" lets the run proceed without runner-bedrock-role-arn, exporting
+      the runner role's own credentials -- which may be far broader than Bedrock -- into
+      the model's process. A temporary, visible opt-in until the Bedrock-only role exists.
+    default: "false"
   github-token:
-    description: "Token for comments; the job's GITHUB_TOKEN"
+    description: >-
+      Token for comments. Must be the job's own GITHUB_TOKEN: short-lived and limited to
+      the job's permissions. Personal access tokens are rejected.
     default: ${{ github.token }}
 
 outputs:
@@ -106,6 +111,7 @@ runs:
         FED: ${{ inputs.federated-role-name }}
         REGION: ${{ inputs.region }}
         TURNS: ${{ inputs.max-turns }}
+        TOKEN: ${{ inputs.github-token }}
       run: |
         set -euo pipefail
         fail() { echo "::error::claude-review: $*"; exit 1; }
@@ -119,6 +125,13 @@ runs:
         [[ "$FED" =~ ^[A-Za-z0-9+=,.@_-]{1,48}$ ]] || fail "invalid federated-role-name"
         [[ "$REGION" =~ ^us-(east|west)-[12]$ ]] || fail "region must be a US region"
         [[ "$TURNS" =~ ^[0-9]{1,3}$ ]] || fail "max-turns must be a number"
+        # The job token only. A personal access token acts as a person across every repo
+        # they can reach and outlives the job; it would sit in .git/config next to the
+        # model and back its one write tool. App installation tokens share the ghs_
+        # prefix with the job token and cannot be told apart here.
+        case "$TOKEN" in
+          ghp_*|github_pat_*|gho_*|ghu_*) fail "github-token must be the job's GITHUB_TOKEN, not a personal or OAuth token" ;;
+        esac
         if [ "$DRAFT" = "true" ]; then
           echo "draft pull request; skipping review"
           echo "run=false" >> "$GITHUB_OUTPUT"
@@ -209,7 +222,8 @@ runs:
     # provider chain), so they have to be exported -- and everything after this step,
     # Claude included, inherits them. With runner-bedrock-role-arn set, what is exported
     # is a 15-minute session on a Bedrock-only role, further narrowed by a session policy,
-    # which gives GHES the same scoped-credential model as the oidc path. Without it, the
+    # which gives GHES the same scoped-credential model as the oidc path. Without it the
+    # run stops, unless the caller sets allow-runner-credentials: "true" -- then the
     # runner role's own keys are exported and the only protection is the read-deny list.
     - name: AWS - runner credentials
       if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'runner'
@@ -217,6 +231,7 @@ runs:
       env:
         REGION: ${{ inputs.region }}
         BEDROCK_ROLE: ${{ inputs.runner-bedrock-role-arn }}
+        ALLOW_RUNNER: ${{ inputs.allow-runner-credentials }}
       run: |
         set -euo pipefail
         if [ -n "$BEDROCK_ROLE" ]; then
@@ -226,9 +241,14 @@ runs:
           CREDS=$(aws sts assume-role --role-arn "$BEDROCK_ROLE" \
             --role-session-name "claude-review-$GITHUB_RUN_ID" --duration-seconds 900 \
             --policy "$POLICY" --query Credentials --output json)
-        else
-          echo "::warning::claude-review: runner-bedrock-role-arn is not set, so the runner role's own credentials are exposed to the model's process. Set it to a Bedrock-only role."
+        elif [ "$ALLOW_RUNNER" = "true" ]; then
+          echo "::warning::claude-review: allow-runner-credentials is true, so the runner role's own credentials are exposed to the model's process. Set runner-bedrock-role-arn to a Bedrock-only role and remove the opt-in."
           CREDS=$(aws configure export-credentials --format process)
+        else
+          # Fail closed: exposing the runner role is a choice the caller makes visibly,
+          # never a default.
+          echo "::error::claude-review: aws-auth is runner but runner-bedrock-role-arn is empty. Set it to a Bedrock-only role, or set allow-runner-credentials: \"true\" to accept exposing the runner role's own credentials."
+          exit 1
         fi
         CREDS="$CREDS" python3 - <<'PY'
         import json, os
@@ -247,21 +267,93 @@ runs:
         PY
         echo "AWS_REGION=$REGION" >> "$GITHUB_ENV"
 
+    # Stop if the credentials are not the role this run was meant to have: a chain that
+    # lands somewhere unexpected (a wrong default, a misconfigured trust) must not reach
+    # the model. The assumed-role ARN names the role, never its path.
     - name: Verify credentials
       if: steps.guard.outputs.run == 'true'
       shell: bash
+      env:
+        AWS_AUTH: ${{ inputs.aws-auth }}
+        TARGET_ROLE: ${{ inputs.target-role-name }}
+        BEDROCK_ROLE: ${{ inputs.runner-bedrock-role-arn }}
       run: |
-        echo "caller: $(aws sts get-caller-identity --query Arn --output text)"
+        set -euo pipefail
+        ARN=$(aws sts get-caller-identity --query Arn --output text)
+        echo "caller: $ARN"
+        if [ "$AWS_AUTH" = "oidc" ]; then
+          EXPECTED="$TARGET_ROLE"
+        elif [ -n "$BEDROCK_ROLE" ]; then
+          EXPECTED="${BEDROCK_ROLE##*/}"
+        else
+          EXPECTED=""   # allow-runner-credentials: the runner role, whatever it is called
+        fi
+        if [ -n "$EXPECTED" ]; then
+          case "$ARN" in
+            *":assumed-role/${EXPECTED}/"*) ;;
+            *) echo "::error::claude-review: caller is $ARN, expected role $EXPECTED"; exit 1 ;;
+          esac
+        fi
 
+    # The prompt below tells the model that CLAUDE.md, .claude/, .mcp.json and similar
+    # files were restored from the base branch, with the PR's copies under .claude-pr/.
+    # This action does not do that; TRI-Actions/claude-code-action does, inside the
+    # Review step and before the CLI starts. It is upstream code, not part of the TRI
+    # Bun patch: restoreConfigFromBase() in src/github/operations/restore-config.ts,
+    # called from src/entrypoints/run.ts, and it logs "Restoring ... from
+    # origin/<branch> (PR head is untrusted)". It restores from the PR's base.ref, not
+    # the default branch. If the fork pin changes, check that it still runs (canary
+    # V8), or drop the paragraph.
+    #
+    # Repo guidance: .github/claude-review.md, read from the repository's DEFAULT branch
+    # through the API. Not base.ref -- a PR can target a branch its author controls --
+    # and not the checkout, which is the PR's. A PR that edits the file changes nothing
+    # until the edit is reviewed and merged. Bounded at 4 KB of UTF-8 text with no
+    # control characters, and hashed into verdict.json. Missing is fine (no guidance);
+    # any other API error fails the step, and a failed step is a blocked verdict.
+    #
+    # This protects the prompt, not the pipeline: the caller workflow still runs from
+    # the PR head and can be edited. Anything that gates on the verdict must still
+    # refuse .github/ and steering-file changes and check the head SHA.
     - name: Build prompt
       id: prompt
       if: steps.guard.outputs.run == 'true'
       shell: bash
       env:
         REVIEW_TYPE: ${{ inputs.review-type }}
-        ADDENDUM: ${{ inputs.prompt-addendum }}
+        DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        GUIDANCE_PATH: .github/claude-review.md
       run: |
         set -euo pipefail
+        export GH_HOST="${GITHUB_SERVER_URL#https://}"
+        [ "$GH_HOST" = "github.com" ] || export GH_ENTERPRISE_TOKEN="$GH_TOKEN"
+        g="$RUNNER_TEMP/claude-guidance.md"
+        : > "$g"
+        if gh api "repos/${GITHUB_REPOSITORY}/contents/${GUIDANCE_PATH}?ref=${DEFAULT_BRANCH}" \
+             --jq .content > "$g.b64" 2> "$g.err"; then
+          base64 -d < "$g.b64" > "$g"
+        elif grep -q "HTTP 404" "$g.err"; then
+          echo "no ${GUIDANCE_PATH} on ${DEFAULT_BRANCH}; reviewing without repo guidance"
+        else
+          echo "::error::claude-review: could not read ${GUIDANCE_PATH} from ${DEFAULT_BRANCH}: $(head -c 300 "$g.err")"
+          exit 1
+        fi
+        size=$(wc -c < "$g" | tr -d ' ')
+        [ "$size" -le 4096 ] || { echo "::error::claude-review: ${GUIDANCE_PATH} is ${size} bytes; the limit is 4096"; exit 1; }
+        python3 - "$g" <<'PY'
+        import sys
+        b = open(sys.argv[1], "rb").read()
+        try:
+            t = b.decode("utf-8")
+        except UnicodeDecodeError:
+            sys.exit("::error::claude-review: repo guidance is not UTF-8 text")
+        if any(ord(c) < 32 and c not in "\n\r\t" for c in t):
+            sys.exit("::error::claude-review: repo guidance contains control characters")
+        PY
+        guidance_sha=""
+        [ "$size" -gt 0 ] && guidance_sha=$(sha256sum "$g" | cut -d' ' -f1)
+
         f="$RUNNER_TEMP/claude-prompt.md"
         if [ "$REVIEW_TYPE" = "security" ]; then
           cat > "$f" <<'EOF'
@@ -320,21 +412,25 @@ runs:
         LOW and start each inline comment with the rating in bold, for example
         "**HIGH** -- ...", because the rating is read programmatically.
         EOF
-        if [ -n "$ADDENDUM" ]; then
-          printf '\nRepository-specific guidance:\n%s\n' "$ADDENDUM" >> "$f"
+        if [ "$size" -gt 0 ]; then
+          printf '\nRepository-specific guidance (from %s on %s):\n' "$GUIDANCE_PATH" "$DEFAULT_BRANCH" >> "$f"
+          cat "$g" >> "$f"
+          printf '\n' >> "$f"
         fi
         cat >> "$f" <<'EOF'
 
         Finish by returning the structured summary the schema requires; the counts must
         match the inline comments you actually left.
         EOF
-        # Random delimiter: a fixed one could be closed early by an addendum containing
-        # it, letting the addendum write arbitrary step outputs.
+        # Random delimiter: a fixed one could be closed early by guidance containing it,
+        # letting the guidance write arbitrary step outputs.
         delim="EOF_$(openssl rand -hex 16)"
         {
           echo "text<<$delim"
           cat "$f"
           echo "$delim"
+          echo "sha256=$(sha256sum "$f" | cut -d' ' -f1)"
+          echo "guidance_sha256=${guidance_sha}"
         } >> "$GITHUB_OUTPUT"
 
     # The hardening, none of it configurable:
@@ -386,7 +482,7 @@ runs:
           --setting-sources user
           --strict-mcp-config
           --allowedTools "mcp__github_inline_comment__create_inline_comment"
-          --disallowedTools "Bash" "WebFetch" "WebSearch" "Read(//proc/**)" "Read(/${{ runner.temp }}/**)" "Read(./.git/**)" "Read(//**/.git/config)"
+          --disallowedTools "Bash" "WebFetch" "WebSearch" "Write" "Edit" "MultiEdit" "NotebookEdit" "Agent" "Read(//proc/**)" "Read(/${{ runner.temp }}/**)" "Read(./.git/**)" "Read(//**/.git/config)"
           --json-schema '{"type":"object","required":["critical","high","medium","low","summary"],"additionalProperties":false,"properties":{"critical":{"type":"integer","minimum":0},"high":{"type":"integer","minimum":0},"medium":{"type":"integer","minimum":0},"low":{"type":"integer","minimum":0},"summary":{"type":"string"}}}'
 
     # Counts, not a yes/no: counts can be cross-checked against the inline comments
@@ -408,6 +504,8 @@ runs:
         REVIEW_TYPE: ${{ inputs.review-type }}
         REVIEW_OUTCOME: ${{ steps.claude.outcome }}
         STRUCTURED: ${{ steps.claude.outputs.structured_output }}
+        PROMPT_SHA: ${{ steps.prompt.outputs.sha256 }}
+        GUIDANCE_SHA: ${{ steps.prompt.outputs.guidance_sha256 }}
       run: |
         set -euo pipefail
         # gh defaults to github.com; on GHES that is HTTP 401.
@@ -417,7 +515,7 @@ runs:
         OBSERVED=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}/comments" --paginate \
           --jq "[.[]
                  | select(.user.type == \"Bot\")
-                 | select(.original_commit_id == \"${HEAD_SHA}\")
+                 | select(.original_commit_id == env.HEAD_SHA)
                  | select(.body | test(\"\\\\*\\\\*(CRITICAL|HIGH)\\\\b\"))] | length" 2>/dev/null || echo "-1")
 
         d="$RUNNER_TEMP/claude-verdict"
@@ -455,6 +553,9 @@ runs:
             "review_type": os.environ["REVIEW_TYPE"],
             "head_sha": os.environ["HEAD_SHA"],
             "pr_number": int(os.environ["PR_NUMBER"]),
+            # Ties the verdict to the exact instructions that produced it.
+            "prompt_sha256": os.environ.get("PROMPT_SHA", ""),
+            "guidance_sha256": os.environ.get("GUIDANCE_SHA", ""),
             # Informational. A consumer takes the event from GitHub's record of the run,
             # never from this file -- the run that wrote it executes PR-controlled code.
             "event_action": os.environ["EVENT_ACTION"],

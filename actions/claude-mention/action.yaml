@@ -29,10 +29,17 @@ inputs:
   runner-bedrock-role-arn:
     description: >-
       runner only. A Bedrock-only role the runner role assumes for this run, with a
-      session policy limited to bedrock:InvokeModel* and a 15-minute session. Empty uses
-      the runner role's own credentials, which may be far broader than Bedrock.
+      session policy limited to bedrock:InvokeModel* and a 15-minute session. Required
+      for runner unless allow-runner-credentials is "true".
     default: ""
+  allow-runner-credentials:
+    description: >-
+      runner only. "true" lets the run proceed without runner-bedrock-role-arn, exporting
+      the runner role's own credentials -- which may be far broader than Bedrock -- into
+      the model's process. A temporary, visible opt-in until the Bedrock-only role exists.
+    default: "false"
   github-token:
+    description: "Must be the job's own GITHUB_TOKEN; personal access tokens are rejected"
     default: ${{ github.token }}
 
 outputs:
@@ -61,6 +68,7 @@ runs:
         PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         GH_TOKEN: ${{ inputs.github-token }}
+        TOKEN: ${{ inputs.github-token }}
         AWS_AUTH: ${{ inputs.aws-auth }}
         MODEL: ${{ inputs.model }}
         ACCOUNT: ${{ inputs.account-id }}
@@ -79,6 +87,13 @@ runs:
         [[ "$FED" =~ ^[A-Za-z0-9+=,.@_-]{1,48}$ ]] || fail "invalid federated-role-name"
         [[ "$REGION" =~ ^us-(east|west)-[12]$ ]] || fail "region must be a US region"
         [[ "$TURNS" =~ ^[0-9]{1,3}$ ]] || fail "max-turns must be a number"
+        # The job token only. A personal access token acts as a person across every repo
+        # they can reach and outlives the job; it would sit in .git/config next to the
+        # model and back its one write tool. App installation tokens share the ghs_
+        # prefix with the job token and cannot be told apart here.
+        case "$TOKEN" in
+          ghp_*|github_pat_*|gho_*|ghu_*) fail "github-token must be the job's GITHUB_TOKEN, not a personal or OAuth token" ;;
+        esac
         # Body and association come from the same object for each event, so a comment
         # can never be paired with the issue's text or the issue author's association.
         case "$EVENT" in
@@ -180,6 +195,7 @@ runs:
       env:
         REGION: ${{ inputs.region }}
         BEDROCK_ROLE: ${{ inputs.runner-bedrock-role-arn }}
+        ALLOW_RUNNER: ${{ inputs.allow-runner-credentials }}
       run: |
         set -euo pipefail
         if [ -n "$BEDROCK_ROLE" ]; then
@@ -189,9 +205,14 @@ runs:
           CREDS=$(aws sts assume-role --role-arn "$BEDROCK_ROLE" \
             --role-session-name "claude-mention-$GITHUB_RUN_ID" --duration-seconds 900 \
             --policy "$POLICY" --query Credentials --output json)
-        else
-          echo "::warning::claude-mention: runner-bedrock-role-arn is not set, so the runner role's own credentials are exposed to the model's process. Set it to a Bedrock-only role."
+        elif [ "$ALLOW_RUNNER" = "true" ]; then
+          echo "::warning::claude-mention: allow-runner-credentials is true, so the runner role's own credentials are exposed to the model's process. Set runner-bedrock-role-arn to a Bedrock-only role and remove the opt-in."
           CREDS=$(aws configure export-credentials --format process)
+        else
+          # Fail closed: exposing the runner role is a choice the caller makes visibly,
+          # never a default.
+          echo "::error::claude-mention: aws-auth is runner but runner-bedrock-role-arn is empty. Set it to a Bedrock-only role, or set allow-runner-credentials: \"true\" to accept exposing the runner role's own credentials."
+          exit 1
         fi
         CREDS="$CREDS" python3 - <<'PY'
         import json, os
@@ -210,8 +231,37 @@ runs:
         PY
         echo "AWS_REGION=$REGION" >> "$GITHUB_ENV"
 
+    # Stop if the credentials are not the role this run was meant to have: a chain that
+    # lands somewhere unexpected (a wrong default, a misconfigured trust) must not reach
+    # the model. The assumed-role ARN names the role, never its path.
+    - name: Verify credentials
+      if: steps.guard.outputs.run == 'true'
+      shell: bash
+      env:
+        AWS_AUTH: ${{ inputs.aws-auth }}
+        TARGET_ROLE: ${{ inputs.target-role-name }}
+        BEDROCK_ROLE: ${{ inputs.runner-bedrock-role-arn }}
+      run: |
+        set -euo pipefail
+        ARN=$(aws sts get-caller-identity --query Arn --output text)
+        echo "caller: $ARN"
+        if [ "$AWS_AUTH" = "oidc" ]; then
+          EXPECTED="$TARGET_ROLE"
+        elif [ -n "$BEDROCK_ROLE" ]; then
+          EXPECTED="${BEDROCK_ROLE##*/}"
+        else
+          EXPECTED=""   # allow-runner-credentials: the runner role, whatever it is called
+        fi
+        if [ -n "$EXPECTED" ]; then
+          case "$ARN" in
+            *":assumed-role/${EXPECTED}/"*) ;;
+            *) echo "::error::claude-mention: caller is $ARN, expected role $EXPECTED"; exit 1 ;;
+          esac
+        fi
+
     # No prompt: the action's normal @claude behaviour answers the comment. Deny rules,
-    # including the double-slash runner.temp rule, are explained in claude-review.
+    # including the double-slash runner.temp rule, and the CLAUDE.md restore the fork
+    # performs on PRs, are explained in claude-review.
     - name: Answer
       if: steps.guard.outputs.run == 'true'
       uses: TRI-Actions/claude-code-action@555a37826cd295d7dae6509760402dccb114f414 # v1.0.231 + TRI bun patch
@@ -226,7 +276,7 @@ runs:
           --setting-sources user
           --strict-mcp-config
           --allowedTools "mcp__github_inline_comment__create_inline_comment"
-          --disallowedTools "Bash" "WebFetch" "WebSearch" "Read(//proc/**)" "Read(/${{ runner.temp }}/**)" "Read(./.git/**)" "Read(//**/.git/config)"
+          --disallowedTools "Bash" "WebFetch" "WebSearch" "Write" "Edit" "MultiEdit" "NotebookEdit" "Agent" "Read(//proc/**)" "Read(/${{ runner.temp }}/**)" "Read(./.git/**)" "Read(//**/.git/config)"
 
     # Credentials written to GITHUB_ENV outlive this action: every later step of the
     # caller's job would inherit them, including its upload step. Blank them on the way
