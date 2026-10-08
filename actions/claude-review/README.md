@@ -17,7 +17,8 @@ Hardened, review-only Claude Code PR review on Bedrock. Works on github.com and 
 | `aws-auth` | `oidc` (github.com: OIDC → federated role → Bedrock role) or `runner` (GHES CodeBuild runner role) | `oidc` |
 | `account-id` | Bedrock account (oidc). The default is the proof-of-concept account; **team callers must pass their own** | `550939891544` |
 | `target-role-name` | Bedrock role (oidc) | `ClaudeCodeBedrockGHA` |
-| `federated-role-name` | Federated role base name (oidc) | `GHAFederatedRole` |
+| `federated-role-name` | Federated role base name (oidc). The default is the Claude-only federated role, whose one target is the Bedrock role | `GHAFederatedRole-Claude` |
+| `allow-shared-federated-role` | oidc only. `"true"` permits `GHAFederatedRole`, the account's shared role, which can also reach its other roles. A temporary, visible opt-in until your account has the Claude-only role | `"false"` |
 | `region` | US region | `us-west-2` |
 | `model` | `us.anthropic.claude-*` inference profile, optionally with a `:N` version suffix | `us.anthropic.claude-sonnet-5` |
 | `max-turns` | Turn cap | `30` |
@@ -50,9 +51,10 @@ These are fixed inside the action:
 
 - `--restricted --setting-sources user --strict-mcp-config`: repo `.claude/settings.json`, hooks and repo MCP servers don't load.
 - The only tool is inline comments. `Bash`, `WebFetch` and `WebSearch` are denied.
-- Reads are denied on `/proc/**`, the runner temp directory (which holds `GITHUB_ENV` with the AWS keys) and `.git/**` (which holds the checkout token).
+- Checkout uses `persist-credentials: false`, and git authenticates through a credential helper that reads the token from the environment, so the token is never written to the working tree.
+- Reads are denied on `/proc/**`, the runner temp directory (which holds `GITHUB_ENV` with the AWS keys) and `.git/**`. Verified for Read, Grep and Glob (canary V2c).
 - Sessions last 900s, named `claude-review-<run_id>`. `configure-aws-credentials` is pinned by SHA. Role-chained sessions can't be refreshed, so a review that runs past 15 minutes fails, and the verdict records a failed review as `blocked`. Keep `timeout-minutes` near 15.
-- `CLAUDE.md`, `CLAUDE.local.md`, `.claude/`, `.mcp.json` and similar files are restored from the PR's base branch before the CLI starts, with the PR's copies under `.claude-pr/` for review. `TRI-Actions/claude-code-action` does this (upstream `restoreConfigFromBase()`); the log shows `Restoring ... (PR head is untrusted)`.
+- `CLAUDE.md`, `CLAUDE.local.md`, `.claude/`, `.mcp.json` and similar files are restored from the repository's **default branch** (never the PR's target) before the CLI starts, with the PR's copies under `.claude-pr/` for review. `TRI-Actions/claude-code-action` does this (upstream `restoreConfigFromBase()`); the log shows `Restoring ... (PR head is untrusted)`.
 - Tools that edit files or start agents (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `Agent`) are denied explicitly.
 - The caller's identity is checked against the expected role before the review starts.
 - Bun is installed before any credential is in the environment: the platform tarball is fetched from the public npm registry and checked against a pinned SHA-512. No npm install scripts run.

@@ -19,7 +19,11 @@ inputs:
   target-role-name:
     default: "ClaudeCodeBedrockGHA"
   federated-role-name:
-    default: "GHAFederatedRole"
+    description: "Federated role base name (oidc). Defaults to the Claude-only role."
+    default: "GHAFederatedRole-Claude"
+  allow-shared-federated-role:
+    description: "oidc only. \"true\" permits the shared GHAFederatedRole; see claude-review."
+    default: "false"
   region:
     default: "us-west-2"
   model:
@@ -69,6 +73,7 @@ runs:
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         GH_TOKEN: ${{ inputs.github-token }}
         TOKEN: ${{ inputs.github-token }}
+        ALLOW_SHARED_FED: ${{ inputs.allow-shared-federated-role }}
         AWS_AUTH: ${{ inputs.aws-auth }}
         MODEL: ${{ inputs.model }}
         ACCOUNT: ${{ inputs.account-id }}
@@ -85,6 +90,11 @@ runs:
         [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "account-id must be 12 digits"
         [[ "$ROLE" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || fail "invalid target-role-name"
         [[ "$FED" =~ ^[A-Za-z0-9+=,.@_-]{1,48}$ ]] || fail "invalid federated-role-name"
+        # The shared federated role reaches every OIDC role in its account, not just
+        # Bedrock; a caller lands on it only by saying so.
+        if [ "$AWS_AUTH" = "oidc" ] && [ "$FED" = "GHAFederatedRole" ] && [ "$ALLOW_SHARED_FED" != "true" ]; then
+          fail "federated-role-name GHAFederatedRole is the account's shared federated role, which can reach more than Bedrock. Use the Claude-only role (the default), or set allow-shared-federated-role: \"true\" to accept it."
+        fi
         [[ "$REGION" =~ ^us-(east|west)-[12]$ ]] || fail "region must be a US region"
         [[ "$TURNS" =~ ^[0-9]{1,3}$ ]] || fail "max-turns must be a number"
         # The job token only. A personal access token acts as a person across every repo
@@ -159,11 +169,15 @@ runs:
         [ "$("$d/package/bin/bun" --version)" = "$BUN_VERSION" ] || { echo "::error::claude-mention: bun version mismatch"; exit 1; }
         echo "path=$d/package/bin/bun" >> "$GITHUB_OUTPUT"
 
+    # Answer-only, so no history is needed: depth 1. persist-credentials: false -- the
+    # fork authenticates git itself, before it fetches the PR branch, through a
+    # credential helper that keeps the token out of the working tree.
     - name: Check out repository code
       if: steps.guard.outputs.run == 'true'
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       with:
-        fetch-depth: 0
+        fetch-depth: 1
+        persist-credentials: false
         token: ${{ inputs.github-token }}
 
     - name: AWS - federated role (OIDC)
@@ -264,7 +278,7 @@ runs:
     # performs on PRs, are explained in claude-review.
     - name: Answer
       if: steps.guard.outputs.run == 'true'
-      uses: TRI-Actions/claude-code-action@555a37826cd295d7dae6509760402dccb114f414 # v1.0.231 + TRI bun patch
+      uses: TRI-Actions/claude-code-action@3527f5ded7c4a7cdc864ecdfd13d8037fff5d7ed # v1.0.231 + TRI patches (claude-code-action#1)
       with:
         github_token: ${{ inputs.github-token }}
         use_bedrock: "true"

@@ -6,7 +6,7 @@ Answers `@claude <question>` on issues and PR comments using Claude Code on Bedr
 
 ## Inputs
 
-`aws-auth` (`oidc` | `runner`), `account-id`, `target-role-name`, `federated-role-name`, `region`, `model`, `max-turns`, `runner-bedrock-role-arn`, `allow-runner-credentials`, `github-token`. These have the same meanings and defaults as claude-review. In particular, `runner` needs `runner-bedrock-role-arn` (or the explicit `allow-runner-credentials` opt-in), `github-token` must be the job token, and team callers pass their own `account-id`.
+`aws-auth` (`oidc` | `runner`), `account-id`, `target-role-name`, `federated-role-name`, `region`, `model`, `max-turns`, `runner-bedrock-role-arn`, `allow-runner-credentials`, `allow-shared-federated-role`, `github-token`. These have the same meanings and defaults as claude-review. In particular, `runner` needs `runner-bedrock-role-arn` (or the explicit `allow-runner-credentials` opt-in), `github-token` must be the job token, and team callers pass their own `account-id`.
 
 ## Example: github.com
 
