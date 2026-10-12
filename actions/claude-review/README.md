@@ -31,6 +31,7 @@ Hardened, review-only Claude Code PR review on Bedrock. Works on github.com and 
 Put review guidance for your repo in **`.github/claude-review.md`** on your **default branch**. The action reads it through the GitHub API from the default branch, never from the PR's checkout or from a workflow input, because a PR can edit both. A PR that changes the file has no effect on its own review; the change applies once it's reviewed and merged.
 
 - Up to 4 KB of UTF-8 text. Larger files, or files with control characters, fail the review (`blocked`).
+- It can't repeat the prompt's own framing or output markers (`Repository-specific guidance`, `structured summary`, `structured_output`, `json-schema`, `the schema requires`, `EOF_`, case-insensitive). A file containing any of them fails the review (`blocked`).
 - Its SHA-256, and the SHA-256 of the full prompt, are recorded in `verdict.json` as `guidance_sha256` and `prompt_sha256`.
 - It's instructions to the model only. It can't change tools, flags, or what the verdict means.
 

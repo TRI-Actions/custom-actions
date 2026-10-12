@@ -324,7 +324,7 @@ runs:
     # through the API. Not base.ref -- a PR can target a branch its author controls --
     # and not the checkout, which is the PR's. A PR that edits the file changes nothing
     # until the edit is reviewed and merged. Bounded at 4 KB of UTF-8 text with no
-    # control characters, and hashed into verdict.json. Missing is fine (no guidance);
+    # control characters or prompt/output markers, and hashed into verdict.json. Missing is fine (no guidance);
     # any other API error fails the step, and a failed step is a blocked verdict.
     #
     # This protects the prompt, not the pipeline: the caller workflow still runs from
@@ -365,6 +365,13 @@ runs:
             sys.exit("::error::claude-review: repo guidance is not UTF-8 text")
         if any(ord(c) < 32 and c not in "\n\r\t" for c in t):
             sys.exit("::error::claude-review: repo guidance contains control characters")
+        # The prompt's own framing and output markers. Guidance that repeats them could
+        # pose as the end of the prompt or as new output instructions.
+        low = t.lower()
+        for m in ("repository-specific guidance", "structured summary", "structured_output",
+                  "json-schema", "the schema requires", "eof_"):
+            if m in low:
+                sys.exit(f"::error::claude-review: repo guidance contains the reserved marker '{m}'")
         PY
         guidance_sha=""
         [ "$size" -gt 0 ] && guidance_sha=$(sha256sum "$g" | cut -d' ' -f1)
