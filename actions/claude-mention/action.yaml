@@ -66,8 +66,10 @@ runs:
         EVENT: ${{ github.event_name }}
         COMMENT_BODY: ${{ github.event.comment.body }}
         COMMENT_ASSOC: ${{ github.event.comment.author_association }}
+        COMMENT_USER: ${{ github.event.comment.user.login }}
         ISSUE_BODY: ${{ github.event.issue.body }}
         ISSUE_ASSOC: ${{ github.event.issue.author_association }}
+        ISSUE_USER: ${{ github.event.issue.user.login }}
         ISSUE_IS_PR: ${{ github.event.issue.pull_request && 'true' || 'false' }}
         PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
@@ -104,17 +106,30 @@ runs:
         case "$TOKEN" in
           ghp_*|github_pat_*|gho_*|ghu_*) fail "github-token must be the job's GITHUB_TOKEN, not a personal or OAuth token" ;;
         esac
-        # Body and association come from the same object for each event, so a comment
-        # can never be paired with the issue's text or the issue author's association.
+        # Body, association and author come from the same object for each event, so a
+        # comment can never be paired with the issue's text or the issue author.
         case "$EVENT" in
-          issue_comment|pull_request_review_comment) BODY="$COMMENT_BODY"; ASSOC="$COMMENT_ASSOC" ;;
-          issues) BODY="$ISSUE_BODY"; ASSOC="$ISSUE_ASSOC" ;;
+          issue_comment|pull_request_review_comment) BODY="$COMMENT_BODY"; ASSOC="$COMMENT_ASSOC"; AUTHOR="$COMMENT_USER" ;;
+          issues) BODY="$ISSUE_BODY"; ASSOC="$ISSUE_ASSOC"; AUTHOR="$ISSUE_USER" ;;
           *) fail "runs on issue_comment, pull_request_review_comment or issues (got '$EVENT')" ;;
         esac
         case "$BODY" in *@claude*) ;; *) skip "no @claude mention" ;; esac
+        export GH_HOST="${GITHUB_SERVER_URL#https://}"
+        [ "$GH_HOST" = "github.com" ] || export GH_ENTERPRISE_TOKEN="$GH_TOKEN"
+        # author_association is computed for what the viewer can see, and the job token
+        # cannot see private org membership, so a private member arrives as CONTRIBUTOR.
+        # For anything other than OWNER/MEMBER/COLLABORATOR, ask the repo instead: the
+        # author qualifies only with write, maintain or admin here. An API error skips.
         case "$ASSOC" in
           OWNER|MEMBER|COLLABORATOR) ;;
-          *) skip "author association '$ASSOC' may not trigger Claude" ;;
+          *)
+            [[ "$AUTHOR" =~ ^[A-Za-z0-9-]{1,39}$ ]] || skip "author association '$ASSOC' may not trigger Claude"
+            perm=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${AUTHOR}/permission" --jq .permission 2>/dev/null) || perm=""
+            case "$perm" in
+              admin|maintain|write) echo "author association '$ASSOC', but $AUTHOR has $perm on this repo" ;;
+              *) skip "author association '$ASSOC' (repo permission '${perm:-unknown}') may not trigger Claude" ;;
+            esac
+            ;;
         esac
         # Same-repo PRs only, as in claude-review. On a PR the action checks out the PR's
         # code, so a member commenting on a fork PR would put fork-controlled files in
@@ -124,8 +139,6 @@ runs:
         if [ "$EVENT" = "pull_request_review_comment" ]; then
           head="$HEAD_REPO"
         elif [ "$EVENT" = "issue_comment" ] && [ "$ISSUE_IS_PR" = "true" ]; then
-          export GH_HOST="${GITHUB_SERVER_URL#https://}"
-          [ "$GH_HOST" = "github.com" ] || export GH_ENTERPRISE_TOKEN="$GH_TOKEN"
           head=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.repo.full_name // ""') \
             || fail "could not read pull request #${PR_NUMBER}"
         else
