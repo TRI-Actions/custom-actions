@@ -82,6 +82,7 @@ A deploy command is authorized only in one of two ways:
 
 - The commenter is an active member of one of the configured teams.
 - The commenter has the `admin`, `maintain` or `write` role, and the exact head SHA has an approval from a reviewer who also has one of those roles, is not the PR author, and did not author or commit any commit in the PR.
+  With `approver-teams`, the reviewer must also be an active member of one of those teams.
 
 An approval of an older commit does not count, and neither does an approval that was dismissed or that the reviewer followed with a change request.
 `web-flow`, the committer of commits made in the GitHub web UI, is ignored, so clicking "Update branch" excludes only the user who clicked it.
@@ -239,6 +240,7 @@ The GitHub API lists at most 250 commits of a PR, so a PR with 250 or more commi
 The reviewer must have the `admin`, `maintain` or `write` role; custom repository roles do not qualify.
 Approval-based authorization also requires the commenter to have the `admin`, `maintain` or `write` role, which is checked before reviews are read.
 Once the head commit has a qualifying approval, any such commenter is authorized.
+With `approver-teams` set, only an approval from an active member of one of those teams qualifies, which keeps a team as the gate while letting other contributors run the command themselves; membership is checked after write access, and an API error other than 404 fails the step.
 Team checks need a token that can read org membership: with a plain `GITHUB_TOKEN`, GitHub can answer 404, which looks like "not a member".
 A denial sets `authorized=false` and `reason` without failing the step; an API error other than 404 fails the step and sets `reason`.
 
@@ -248,7 +250,8 @@ A denial sets `authorized=false` and `reason` without failing the step; an API e
 | `actor` | yes | - | Login of the comment author |
 | `triggering-actor` | no | `${{ github.triggering_actor }}` | Login that triggered the run; must equal actor (case-insensitive), which blocks re-runs of another user's command; pass an empty string to skip the check |
 | `teams` | no | `''` | Comma-separated team slugs whose active members are authorized (may be empty) |
-| `org` | no | `${{ github.repository_owner }}` | Organization that owns the teams |
+| `approver-teams` | no | `''` | Comma-separated team slugs; when set, an approval only counts if the reviewer is also an active member of one of them (empty: any reviewer with write access) |
+| `org` | no | `${{ github.repository_owner }}` | Organization that owns the teams and the approver teams |
 | `allow-approval` | no | `true` | Also authorize a commenter with write access when the head commit is approved by a reviewer with write access who is not the PR author and did not author or commit any commit in the PR (true/false) |
 | `sha` | no | `''` | Full PR head commit SHA (required when allow-approval is true) |
 | `pr-author` | no | `''` | Login of the PR author (required when allow-approval is true) |

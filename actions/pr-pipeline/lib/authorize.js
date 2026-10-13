@@ -3,7 +3,8 @@
 // Decides whether the author of a PR comment command may run it: either via active
 // membership in one of the given teams, or, when the commenter has write access, via an
 // approval of the PR head commit by a reviewer with write access who is neither the PR
-// author nor an author or committer of any commit in the PR.
+// author nor an author or committer of any commit in the PR. When approver teams are set,
+// the reviewer must also be an active member of one of them.
 // Pure helpers are exported for unit tests; run() is the github-script entry point.
 
 const QUALIFYING_ROLES = new Set(['admin', 'maintain', 'write']);
@@ -112,7 +113,7 @@ async function hasWriteAccess(github, owner, repo, username) {
 
 // `actorHasWrite` is false only when approval-based authorization was skipped because the
 // commenter lacks write access.
-function denialReason({ actor, org, teams, allowApproval, sha, actorHasWrite = true }) {
+function denialReason({ actor, org, teams, approverTeams = [], allowApproval, sha, actorHasWrite = true }) {
   const teamPart = teams.length
     ? `\`${actor}\` is not an active member of ${teams.length === 1 ? 'team' : 'any of the teams'} ${teams
         .map((team) => `\`${org}/${team}\``)
@@ -124,8 +125,13 @@ function denialReason({ actor, org, teams, allowApproval, sha, actorHasWrite = t
   } else if (!actorHasWrite) {
     approvalPart = `\`${actor}\` does not have write access to the repository, which approval-based authorization requires`;
   } else {
+    const reviewer = approverTeams.length
+      ? `a member of ${approverTeams.length === 1 ? 'team' : 'one of the teams'} ${approverTeams
+          .map((team) => `\`${org}/${team}\``)
+          .join(', ')} with write access`
+      : 'a reviewer with write access';
     approvalPart =
-      `the head commit \`${sha.slice(0, 7)}\` has no approval from a reviewer with write access ` +
+      `the head commit \`${sha.slice(0, 7)}\` has no approval from ${reviewer} ` +
       '(other than the PR author and the authors and committers of its commits)';
   }
   return `Not authorized: ${teamPart}, and ${approvalPart}.`;
@@ -140,6 +146,7 @@ function loadConfig(env, context) {
     actor,
     triggeringActor: String(env.PRP_TRIGGERING_ACTOR ?? '').trim(),
     teams: parseTeams(env.PRP_TEAMS),
+    approverTeams: parseTeams(env.PRP_APPROVER_TEAMS),
     org: String(env.PRP_ORG ?? '').trim() || context.repo.owner,
     allowApproval: parseBoolean('allow-approval', env.PRP_ALLOW_APPROVAL ?? 'true'),
     sha: String(env.PRP_SHA ?? '').trim().toLowerCase(),
@@ -180,7 +187,7 @@ async function run({ github, context, core, env }) {
     failClosed(`authorize: ${err.message}`);
     return;
   }
-  const { actor, triggeringActor, teams, org, allowApproval, sha, prAuthor, prNumber } = config;
+  const { actor, triggeringActor, teams, approverTeams, org, allowApproval, sha, prAuthor, prNumber } = config;
 
   if (triggeringActor && !sameLogin(triggeringActor, actor)) {
     finish(
@@ -217,7 +224,7 @@ async function run({ github, context, core, env }) {
       return;
     }
     if (!actorHasWrite) {
-      finish(false, '', denialReason({ actor, org, teams, allowApproval, sha, actorHasWrite }));
+      finish(false, '', denialReason({ actor, org, teams, approverTeams, allowApproval, sha, actorHasWrite }));
       return;
     }
 
@@ -263,6 +270,16 @@ async function run({ github, context, core, env }) {
         failClosed(`authorize: checking repository permission of \`${login}\` failed (${describeError(err)})`);
         return;
       }
+      if (!qualifies) continue;
+      for (const team of approverTeams) {
+        try {
+          qualifies = await isActiveTeamMember(github, org, team, login);
+        } catch (err) {
+          failClosed(`authorize: checking membership of \`${login}\` in team \`${org}/${team}\` failed (${describeError(err)})`);
+          return;
+        }
+        if (qualifies) break;
+      }
       if (qualifies) {
         finish(true, `approval:${login}`, `head commit \`${sha.slice(0, 7)}\` is approved by \`${login}\``);
         return;
@@ -270,7 +287,7 @@ async function run({ github, context, core, env }) {
     }
   }
 
-  finish(false, '', denialReason({ actor, org, teams, allowApproval, sha }));
+  finish(false, '', denialReason({ actor, org, teams, approverTeams, allowApproval, sha }));
 }
 
 module.exports = {
