@@ -1,11 +1,13 @@
 # Get AWS Credentials
 
-A reusable GitHub Action that assumes an **IAM role chain** using OpenID Connect (OIDC) to access AWS resources across accounts.
+A reusable GitHub Action that gets short-lived AWS credentials for a role in a target account using GitHub OpenID Connect (OIDC).
 
 This action:
-1. Uses OIDC to authenticate into a **federated service role** in the central AWS account.
-2. Assumes a **target role** in the specified destination AWS account.
-3. Exports short-lived AWS credentials automatically to all subsequent workflow steps.
+1. Assumes the **target role** directly with the job's OIDC token, which works once the role trusts its own account's GitHub OIDC provider.
+2. If that fails and `direct` is `auto`, falls back to the **federated role chain**: OIDC into the federated service role in the central account, then the target role. A notice in the log names the role and the reason.
+3. Exports the credentials and the region to all subsequent workflow steps.
+
+The fallback exists while accounts move from the central federated roles to per-account OIDC trust; it will be removed once every account trusts GitHub directly.
 
 ---
 
@@ -17,6 +19,14 @@ This action:
 | `region` | AWS Region | No | `us-east-1` |
 | `federated-role-name` | Base name of the federated service role in the central account | No | `GHAFederatedRole` |
 | `target-role-name` | Name of the target role to assume in the target account | No | `DefaultCrossAccountRole` |
+| `direct` | `auto`: direct, then the chain; `only`: direct, no fallback; `off`: chain only | No | `auto` |
+| `role-duration-seconds` | Session duration for the direct path, at most the role's maximum session duration | No | `3600` |
+
+## Outputs
+
+| Name | Description |
+|------|-------------|
+| `path` | `direct` or `chain`: how the credentials were obtained |
 
 ---
 
