@@ -17,8 +17,12 @@ inputs:
     description: 'Comma-separated team slugs whose active members are authorized (may be empty)'
     required: false
     default: ''
+  approver-teams:
+    description: 'Comma-separated team slugs; when set, an approval only counts if the reviewer is also an active member of one of them (empty: any reviewer with write access)'
+    required: false
+    default: ''
   org:
-    description: 'Organization that owns the teams'
+    description: 'Organization that owns the teams and the approver teams'
     required: false
     default: ${{ github.repository_owner }}
   allow-approval:
@@ -59,6 +63,7 @@ runs:
         PRP_ACTOR: ${{ inputs.actor }}
         PRP_TRIGGERING_ACTOR: ${{ inputs.triggering-actor }}
         PRP_TEAMS: ${{ inputs.teams }}
+        PRP_APPROVER_TEAMS: ${{ inputs.approver-teams }}
         PRP_ORG: ${{ inputs.org }}
         PRP_ALLOW_APPROVAL: ${{ inputs.allow-approval }}
         PRP_SHA: ${{ inputs.sha }}

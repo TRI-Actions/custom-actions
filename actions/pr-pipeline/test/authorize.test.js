@@ -505,3 +505,74 @@ test('misconfiguration fails the step', async () => {
     assert.equal(github.calls.teams.length, 0);
   }
 });
+
+test('with approver-teams, an approval from a write-access member of an approver team authorizes', async () => {
+  const { github, core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'platform, ie' }), {
+    teams: { ie: { bob: 'active' } },
+    reviews: [review(1, 'bob', 'APPROVED')],
+    permissions: { carol: WRITE, bob: WRITE },
+  });
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'true');
+  assert.equal(core.outputs.via, 'approval:bob');
+  // carol in the commenter teams, then bob in each approver team until one matches
+  assert.deepEqual(
+    github.calls.teams.map((call) => `${call.team_slug}:${call.username}`),
+    ['ie:carol', 'platform:bob', 'ie:bob'],
+  );
+});
+
+test('with approver-teams, an approval from a write-access reviewer outside the teams does not authorize', async () => {
+  const { core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'ie' }), {
+    teams: { ie: { eve: 'pending' } },
+    reviews: [review(1, 'bob', 'APPROVED'), review(2, 'eve', 'APPROVED')],
+    permissions: { carol: WRITE, bob: WRITE, eve: WRITE },
+  });
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'false');
+  assert.match(core.outputs.reason, /no approval from a member of team `TRI-IE\/ie` with write access/);
+});
+
+test('with approver-teams, an approver team member without write access does not authorize', async () => {
+  const { github, core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'ie' }), {
+    teams: { ie: { bob: 'active' } },
+    reviews: [review(1, 'bob', 'APPROVED')],
+    permissions: { carol: WRITE, bob: READ },
+  });
+  assert.equal(core.outputs.authorized, 'false');
+  // write access is checked first, so bob's team membership is never looked up
+  assert.deepEqual(
+    github.calls.teams.map((call) => `${call.team_slug}:${call.username}`),
+    ['ie:carol'],
+  );
+});
+
+test('with approver-teams, an approval of an older SHA by a team member does not authorize', async () => {
+  const { core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'ie' }), {
+    teams: { ie: { bob: 'active' } },
+    reviews: [review(1, 'bob', 'APPROVED', { commit: OLD })],
+    permissions: { carol: WRITE, bob: WRITE },
+  });
+  assert.equal(core.outputs.authorized, 'false');
+});
+
+test('with approver-teams, a team API error for an approver fails closed', async () => {
+  const { core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'ie' }), {
+    teams: { ie: { bob: 502 } },
+    reviews: [review(1, 'bob', 'APPROVED')],
+    permissions: { carol: WRITE, bob: WRITE },
+  });
+  assert.equal(core.failures.length, 1);
+  assert.match(core.failures[0], /membership of `bob` in team `TRI-IE\/ie` failed \(status 502/);
+  assert.equal(core.outputs.authorized, 'false');
+});
+
+test('approver-teams reaches the script through env and defaults to empty', () => {
+  const text = fs.readFileSync(path.join(__dirname, '..', 'authorize', 'action.yaml'), 'utf8');
+  const block = /^  approver-teams:\n((?:    .*\n)+)/m.exec(text);
+  assert.ok(block, 'no approver-teams input');
+  assert.match(block[1], /^    default: ''$/m);
+  assert.match(text, /^\s+PRP_APPROVER_TEAMS: \$\{\{ inputs\.approver-teams \}\}$/m);
+  assert.deepEqual(loadConfig(baseEnv(), CONTEXT).approverTeams, []);
+  assert.deepEqual(loadConfig(baseEnv({ PRP_APPROVER_TEAMS: 'ie, data' }), CONTEXT).approverTeams, ['ie', 'data']);
+});
