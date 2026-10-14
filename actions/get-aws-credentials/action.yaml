@@ -1,5 +1,5 @@
 name: "Get AWS Credentials"
-description: "Assume an IAM role chain (OIDC → federated role → target account)"
+description: "Assume a role in the target account with GitHub OIDC, directly or through the shared services federated role"
 
 inputs:
   account-id:
@@ -14,11 +14,80 @@ inputs:
   target-role-name:
     description: "Name of the target role to assume in the target account"
     default: "DefaultCrossAccountRole"
+  direct:
+    description: "auto: assume the target role directly with OIDC and fall back to the federated role chain; only: direct, no fallback; off: chain only"
+    default: "auto"
+  role-duration-seconds:
+    description: "Session duration for the direct path; at most the target role's maximum session duration"
+    default: "3600"
+
+outputs:
+  path:
+    description: "How the credentials were obtained: direct or chain"
+    value: ${{ steps.direct.outputs.path || 'chain' }}
 
 runs:
   using: "composite"
   steps:
+    # The target role trusts its own account's GitHub OIDC provider once its account is migrated.
+    # Until then the direct call fails and the federated role chain below is used.
+    - name: Assume the target role directly with OIDC
+      id: direct
+      if: inputs.direct != 'off'
+      shell: bash
+      env:
+        ACCOUNT_ID: ${{ inputs.account-id }}
+        ROLE_NAME: ${{ inputs.target-role-name }}
+        REGION: ${{ inputs.region }}
+        MODE: ${{ inputs.direct }}
+        DURATION: ${{ inputs.role-duration-seconds }}
+      run: |
+        set -euo pipefail
+        [[ "$ACCOUNT_ID" =~ ^[0-9]{12}$ ]] || { echo "::error::account-id must be a 12-digit AWS account id"; exit 1; }
+        [[ "$ROLE_NAME" =~ ^[A-Za-z0-9+=,.@_/-]+$ ]] || { echo "::error::target-role-name is not a valid IAM role name"; exit 1; }
+        [[ "$MODE" == auto || "$MODE" == only ]] || { echo "::error::direct must be auto, only or off"; exit 1; }
+        [[ "$DURATION" =~ ^[0-9]+$ ]] || { echo "::error::role-duration-seconds must be a number"; exit 1; }
+        role_arn="arn:aws:iam::${ACCOUNT_ID}:role/${ROLE_NAME}"
+
+        fallback() {
+          if [ "$MODE" = only ]; then
+            echo "::error::Could not assume ${role_arn} directly: $1"
+            exit 1
+          fi
+          echo "::notice::Could not assume ${role_arn} directly ($1); using the federated role chain."
+          echo "path=chain" >> "$GITHUB_OUTPUT"
+          exit 0
+        }
+
+        [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] || fallback "no OIDC token: the job needs permissions: id-token: write"
+        token="$(curl -sSf -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=sts.amazonaws.com" | jq -r '.value')" \
+          || fallback "requesting the OIDC token failed"
+        echo "::add-mask::$token"
+
+        if ! creds="$(aws sts assume-role-with-web-identity --no-sign-request --region "$REGION" \
+            --role-arn "$role_arn" --role-session-name github-actions --duration-seconds "$DURATION" \
+            --web-identity-token "$token" --output json 2> "$RUNNER_TEMP/get-aws-credentials-direct.err")"; then
+          fallback "$(grep -m1 -v '^$' "$RUNNER_TEMP/get-aws-credentials-direct.err" || echo 'unknown error')"
+        fi
+
+        key_id="$(jq -r '.Credentials.AccessKeyId' <<< "$creds")"
+        secret="$(jq -r '.Credentials.SecretAccessKey' <<< "$creds")"
+        session="$(jq -r '.Credentials.SessionToken' <<< "$creds")"
+        echo "::add-mask::$key_id"
+        echo "::add-mask::$secret"
+        echo "::add-mask::$session"
+        {
+          echo "AWS_ACCESS_KEY_ID=$key_id"
+          echo "AWS_SECRET_ACCESS_KEY=$secret"
+          echo "AWS_SESSION_TOKEN=$session"
+          echo "AWS_REGION=$REGION"
+          echo "AWS_DEFAULT_REGION=$REGION"
+        } >> "$GITHUB_ENV"
+        echo "Assumed ${role_arn} directly with OIDC."
+        echo "path=direct" >> "$GITHUB_OUTPUT"
+
     - name: Configure AWS credentials with OIDC in service account
+      if: inputs.direct == 'off' || steps.direct.outputs.path == 'chain'
       uses: aws-actions/configure-aws-credentials@v6.2.0
       with:
         role-to-assume: arn:aws:iam::371027173325:role/${{ inputs.federated-role-name }}-${{ inputs.account-id }}
@@ -26,6 +95,7 @@ runs:
 
     - name: Assume target role in target account
       id: assume-target
+      if: inputs.direct == 'off' || steps.direct.outputs.path == 'chain'
       shell: bash
       run: |
         CREDS=$(aws sts assume-role \
