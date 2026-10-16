@@ -199,7 +199,7 @@ runs:
     # the federated chain: a missing trust fails here rather than taking the wider path.
     - name: AWS - Bedrock role (direct OIDC)
       if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc-direct'
-      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
       with:
         role-to-assume: arn:aws:iam::${{ inputs.account-id }}:role/${{ inputs.target-role-name }}
         # The trust policy pulumi-cross-account writes allows
@@ -211,7 +211,7 @@ runs:
 
     - name: AWS - federated role (OIDC)
       if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc'
-      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
       with:
         role-to-assume: arn:aws:iam::371027173325:role/${{ inputs.federated-role-name }}-${{ inputs.account-id }}
         aws-region: ${{ inputs.region }}
@@ -220,7 +220,7 @@ runs:
 
     - name: AWS - Bedrock role
       if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc'
-      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
       with:
         role-to-assume: arn:aws:iam::${{ inputs.account-id }}:role/${{ inputs.target-role-name }}
         role-chaining: true
