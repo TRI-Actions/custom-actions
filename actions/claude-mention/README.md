@@ -39,7 +39,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: TRI-Actions/custom-actions/actions/claude-mention@<sha>
+      - uses: TRI-Actions/custom-actions/actions/claude-mention@d4c9a5d9ea1d3548adf31dc5151f9d92fb9e67d9 # claude-mention/v0.1.0
 ```
 
 On GHES, use the CodeBuild `runs-on` label, drop `id-token: write`, and pass `aws-auth: runner` with `runner-bedrock-role-arn`.
