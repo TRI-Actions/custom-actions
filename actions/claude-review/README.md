@@ -92,7 +92,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - id: claude
-        uses: TRI-Actions/custom-actions/actions/claude-review@<sha>
+        uses: TRI-Actions/custom-actions/actions/claude-review@d4c9a5d9ea1d3548adf31dc5151f9d92fb9e67d9 # claude-review/v0.1.0
         # Repo guidance goes in .github/claude-review.md on the default branch.
       - if: always() && steps.claude.outputs.verdict-file != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -121,7 +121,7 @@ jobs:
       issues: write
     steps:
       - id: claude
-        uses: TRI-Actions/custom-actions/actions/claude-review@<sha>
+        uses: TRI-Actions/custom-actions/actions/claude-review@d4c9a5d9ea1d3548adf31dc5151f9d92fb9e67d9 # claude-review/v0.1.0
         with:
           aws-auth: runner
           runner-bedrock-role-arn: arn:aws:iam::<ACCOUNT>:role/<BedrockOnlyRole>
