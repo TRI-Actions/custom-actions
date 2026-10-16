@@ -25,7 +25,7 @@ inputs:
     description: "oidc only. \"true\" permits the shared GHAFederatedRole; see claude-review."
     default: "false"
   region:
-    default: "us-west-2"
+    default: "us-east-1"
   model:
     default: "us.anthropic.claude-sonnet-5"
   max-turns:
