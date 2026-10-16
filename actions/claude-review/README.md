@@ -19,7 +19,7 @@ Hardened, review-only Claude Code PR review on Bedrock. Works on github.com and 
 | `target-role-name` | Bedrock role (oidc-direct, oidc) | `ClaudeCodeBedrockGHA` |
 | `federated-role-name` | Federated role base name (oidc). The default is the Claude-only federated role, whose one target is the Bedrock role | `GHAFederatedRole-Claude` |
 | `allow-shared-federated-role` | oidc only. `"true"` permits `GHAFederatedRole`, the account's shared role, which can also reach its other roles. A temporary, visible opt-in until your account has the Claude-only role | `"false"` |
-| `region` | US region | `us-west-2` |
+| `region` | US region. Bedrock invocation logging for 550939891544 is in us-east-1 | `us-east-1` |
 | `model` | `us.anthropic.claude-*` inference profile, optionally with a `:N` version suffix | `us.anthropic.claude-sonnet-5` |
 | `max-turns` | Turn cap | `30` |
 | `runner-bedrock-role-arn` | runner only. A Bedrock-only role assumed for the run (15-minute session, session policy limited to `bedrock:InvokeModel*`). **Required for `runner`** unless `allow-runner-credentials` is set | `""` |

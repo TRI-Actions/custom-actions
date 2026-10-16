@@ -62,7 +62,7 @@ inputs:
     default: "false"
   region:
     description: "AWS region (US only)"
-    default: "us-west-2"
+    default: "us-east-1"
   model:
     description: "Bedrock inference profile; must be us.anthropic.claude-*"
     default: "us.anthropic.claude-sonnet-5"
