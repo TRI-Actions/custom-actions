@@ -22,7 +22,8 @@ description: "Hardened, review-only Claude Code PR review on Bedrock (github.com
 #
 # ─── WHAT THE CALLER OWNS ────────────────────────────────────────────────────────────
 # A composite cannot set job permissions or runs-on. The caller job needs exactly:
-#   contents: read, pull-requests: write, issues: write, and id-token: write for oidc.
+#   contents: read, pull-requests: write, issues: write, and id-token: write for oidc
+#   and oidc-direct.
 # Nothing else -- in particular not statuses, actions or checks.
 #
 # The verdict is an OUTPUT and a file, not a commit status (statuses are forgeable by
@@ -38,14 +39,15 @@ inputs:
     default: "general"
   aws-auth:
     description: >-
+      `oidc-direct`: GitHub OIDC -> target role, directly (github.com).
       `oidc`: GitHub OIDC -> federated role in 371027173325 -> target role (github.com).
       `runner`: the runner's own role holds the Bedrock grant (GHES CodeBuild runners).
-    default: "oidc"
+    default: "oidc-direct"
   account-id:
-    description: "AWS account holding the Bedrock role (oidc only)"
+    description: "AWS account holding the Bedrock role (oidc-direct and oidc)"
     default: "550939891544"
   target-role-name:
-    description: "Bedrock role assumed after the federated hop (oidc only)"
+    description: "Bedrock role (oidc-direct and oidc)"
     default: "ClaudeCodeBedrockGHA"
   federated-role-name:
     description: >-
@@ -127,7 +129,7 @@ runs:
         [ "$EVENT" = "pull_request" ] || fail "runs on pull_request only (got '$EVENT'); use claude-mention for comments"
         [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || fail "head repository '$HEAD_REPO' is not '$GITHUB_REPOSITORY'; fork PRs are not reviewed"
         [[ "$REVIEW_TYPE" =~ ^(general|security)$ ]] || fail "review-type must be general or security"
-        [[ "$AWS_AUTH" =~ ^(oidc|runner)$ ]] || fail "aws-auth must be oidc or runner"
+        [[ "$AWS_AUTH" =~ ^(oidc-direct|oidc|runner)$ ]] || fail "aws-auth must be oidc-direct, oidc or runner"
         [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+(:[0-9]+)?$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
         [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "account-id must be 12 digits"
         [[ "$ROLE" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || fail "invalid target-role-name"
@@ -209,6 +211,22 @@ runs:
     # credentials, uses a fixed session name, and has no duration input. Here: SHA-pinned,
     # 15-minute sessions, and a session name that ties every Bedrock call in CloudTrail
     # to a repo run.
+    # oidc-direct: one hop. The Bedrock role trusts its own account's GitHub OIDC provider
+    # and lists the repos allowed to assume it (pulumi-cross-account, <account>/roles/
+    # <role>.yaml), so a repo listed there reaches that role and no other. No fallback to
+    # the federated chain: a missing trust fails here rather than taking the wider path.
+    - name: AWS - Bedrock role (direct OIDC)
+      if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc-direct'
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.account-id }}:role/${{ inputs.target-role-name }}
+        # The trust policy pulumi-cross-account writes allows
+        # sts:AssumeRoleWithWebIdentity only, not sts:TagSession.
+        role-skip-session-tagging: true
+        aws-region: ${{ inputs.region }}
+        role-duration-seconds: 900
+        role-session-name: claude-review-${{ github.run_id }}
+
     - name: AWS - federated role (OIDC)
       if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc'
       uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
@@ -296,7 +314,7 @@ runs:
         set -euo pipefail
         ARN=$(aws sts get-caller-identity --query Arn --output text)
         echo "caller: $ARN"
-        if [ "$AWS_AUTH" = "oidc" ]; then
+        if [ "$AWS_AUTH" = "oidc" ] || [ "$AWS_AUTH" = "oidc-direct" ]; then
           EXPECTED="$TARGET_ROLE"
         elif [ -n "$BEDROCK_ROLE" ]; then
           EXPECTED="${BEDROCK_ROLE##*/}"

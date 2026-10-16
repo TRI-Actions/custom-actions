@@ -8,12 +8,12 @@ description: "Hardened `@claude` responder on issues and PR comments, Bedrock-ba
 # comments there. The differences are the trigger and the author gate.
 #
 # Caller job permissions: contents: read, pull-requests: write, issues: write, and
-# id-token: write for oidc.
+# id-token: write for oidc-direct and oidc.
 
 inputs:
   aws-auth:
-    description: "`oidc` (github.com) or `runner` (GHES CodeBuild runner role)"
-    default: "oidc"
+    description: "`oidc-direct` or `oidc` (github.com), or `runner` (GHES CodeBuild runner role); see claude-review"
+    default: "oidc-direct"
   account-id:
     default: "550939891544"
   target-role-name:
@@ -87,7 +87,7 @@ runs:
         set -euo pipefail
         fail() { echo "::error::claude-mention: $*"; exit 1; }
         skip() { echo "skipping: $*"; echo "run=false" >> "$GITHUB_OUTPUT"; exit 0; }
-        [[ "$AWS_AUTH" =~ ^(oidc|runner)$ ]] || fail "aws-auth must be oidc or runner"
+        [[ "$AWS_AUTH" =~ ^(oidc-direct|oidc|runner)$ ]] || fail "aws-auth must be oidc-direct, oidc or runner"
         [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+(:[0-9]+)?$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
         [[ "$ACCOUNT" =~ ^[0-9]{12}$ ]] || fail "account-id must be 12 digits"
         [[ "$ROLE" =~ ^[A-Za-z0-9+=,.@_-]{1,64}$ ]] || fail "invalid target-role-name"
@@ -193,6 +193,22 @@ runs:
         persist-credentials: false
         token: ${{ inputs.github-token }}
 
+    # oidc-direct: one hop. The Bedrock role trusts its own account's GitHub OIDC provider
+    # and lists the repos allowed to assume it (pulumi-cross-account, <account>/roles/
+    # <role>.yaml), so a repo listed there reaches that role and no other. No fallback to
+    # the federated chain: a missing trust fails here rather than taking the wider path.
+    - name: AWS - Bedrock role (direct OIDC)
+      if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc-direct'
+      uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
+      with:
+        role-to-assume: arn:aws:iam::${{ inputs.account-id }}:role/${{ inputs.target-role-name }}
+        # The trust policy pulumi-cross-account writes allows
+        # sts:AssumeRoleWithWebIdentity only, not sts:TagSession.
+        role-skip-session-tagging: true
+        aws-region: ${{ inputs.region }}
+        role-duration-seconds: 900
+        role-session-name: claude-mention-${{ github.run_id }}
+
     - name: AWS - federated role (OIDC)
       if: steps.guard.outputs.run == 'true' && inputs.aws-auth == 'oidc'
       uses: aws-actions/configure-aws-credentials@e7f100cf4c008499ea8adda475de1042d6975c7b # v6.2.0
@@ -272,7 +288,7 @@ runs:
         set -euo pipefail
         ARN=$(aws sts get-caller-identity --query Arn --output text)
         echo "caller: $ARN"
-        if [ "$AWS_AUTH" = "oidc" ]; then
+        if [ "$AWS_AUTH" = "oidc" ] || [ "$AWS_AUTH" = "oidc-direct" ]; then
           EXPECTED="$TARGET_ROLE"
         elif [ -n "$BEDROCK_ROLE" ]; then
           EXPECTED="${BEDROCK_ROLE##*/}"
