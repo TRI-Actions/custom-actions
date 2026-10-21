@@ -673,6 +673,9 @@ runs:
         # "Claude finished ... View job" and its rule. An error header stays: it is the news.
         orig = re.sub(r"\A\*\*Claude finished\b.*?\n---\n+", "", orig, flags=re.S)
         orig = re.sub(r"(?m)^[ \t]*- \[[ xX]\] .*\n?", "", orig)
+        # The checklist's heading is now empty: drop a heading whose next heading is not its child.
+        orig = re.sub(r"(?m)^(#{1,6}) [^\n]*\n\s*(?=(#{1,6}) |\Z)",
+                      lambda m: "" if not m.group(2) or len(m.group(2)) <= len(m.group(1)) else m.group(0), orig)
         orig = re.sub(r"\n{3,}", "\n\n", orig).lstrip()
         # Idempotent: a re-run replaces the block it appended last time.
         sep = f"\n\n---\n\n<!-- {os.environ['MARKER']} -->"
