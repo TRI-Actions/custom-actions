@@ -451,6 +451,16 @@ runs:
         summary only for what spans files. Rate each finding CRITICAL, HIGH, MEDIUM or
         LOW and start each inline comment with the rating in bold, for example
         "**HIGH** -- ...", because the rating is read programmatically.
+
+        Rate by the harm if the concern is real, not by how sure you are; put the doubt
+        in the text. Both review types use this scale, so one issue gets one rating:
+        - CRITICAL: exploitable as merged, or exposes or loses data or credentials.
+        - HIGH: breaks at runtime, opens a security gap, or weakens a check or control.
+        - MEDIUM: wrong only under a condition or edge case, or a risk that needs one.
+        - LOW: minor issue, nit or docs drift; a question only when you cannot name a
+          harm. When you can, rate the harm and ask the question in the text.
+        When two rules, here or in repository guidance, give one finding different
+        ratings, use the higher one.
         EOF
         if [ "$size" -gt 0 ]; then
           printf '\nRepository-specific guidance (from %s on %s):\n' "$GUIDANCE_PATH" "$DEFAULT_BRANCH" >> "$f"
