@@ -14,12 +14,12 @@ Hardened, review-only Claude Code PR review on Bedrock. Works on github.com and 
 | Name | Description | Default |
 |------|-------------|---------|
 | `review-type` | `general` or `security` | `general` |
-| `aws-auth` | `oidc` (github.com: OIDC → federated role → Bedrock role) or `runner` (GHES CodeBuild runner role) | `oidc` |
-| `account-id` | Bedrock account (oidc). The default is the proof-of-concept account; **team callers must pass their own** | `550939891544` |
-| `target-role-name` | Bedrock role (oidc) | `ClaudeCodeBedrockGHA` |
+| `aws-auth` | `oidc-direct` (github.com: OIDC → Bedrock role, one hop), `oidc` (github.com: OIDC → federated role → Bedrock role) or `runner` (GHES CodeBuild runner role) | `oidc-direct` |
+| `account-id` | Bedrock account (oidc-direct, oidc). The default is the proof-of-concept account; **team callers must pass their own** | `550939891544` |
+| `target-role-name` | Bedrock role (oidc-direct, oidc) | `ClaudeCodeBedrockGHA` |
 | `federated-role-name` | Federated role base name (oidc). The default is the Claude-only federated role, whose one target is the Bedrock role | `GHAFederatedRole-Claude` |
 | `allow-shared-federated-role` | oidc only. `"true"` permits `GHAFederatedRole`, the account's shared role, which can also reach its other roles. A temporary, visible opt-in until your account has the Claude-only role | `"false"` |
-| `region` | US region | `us-west-2` |
+| `region` | US region. Bedrock invocation logging for 550939891544 is in us-east-1 | `us-east-1` |
 | `model` | `us.anthropic.claude-*` inference profile, optionally with a `:N` version suffix | `us.anthropic.claude-sonnet-5` |
 | `max-turns` | Turn cap | `30` |
 | `runner-bedrock-role-arn` | runner only. A Bedrock-only role assumed for the run (15-minute session, session policy limited to `bedrock:InvokeModel*`). **Required for `runner`** unless `allow-runner-credentials` is set | `""` |
@@ -92,7 +92,7 @@ jobs:
       cancel-in-progress: true
     steps:
       - id: claude
-        uses: TRI-Actions/custom-actions/actions/claude-review@<sha>
+        uses: TRI-Actions/custom-actions/actions/claude-review@d4c9a5d9ea1d3548adf31dc5151f9d92fb9e67d9 # claude-review/v0.1.0
         # Repo guidance goes in .github/claude-review.md on the default branch.
       - if: always() && steps.claude.outputs.verdict-file != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -121,7 +121,7 @@ jobs:
       issues: write
     steps:
       - id: claude
-        uses: TRI-Actions/custom-actions/actions/claude-review@<sha>
+        uses: TRI-Actions/custom-actions/actions/claude-review@d4c9a5d9ea1d3548adf31dc5151f9d92fb9e67d9 # claude-review/v0.1.0
         with:
           aws-auth: runner
           runner-bedrock-role-arn: arn:aws:iam::<ACCOUNT>:role/<BedrockOnlyRole>
@@ -184,8 +184,17 @@ on:
       - '.gitmodules'
 ```
 
-## Prerequisites (oidc)
+## Prerequisites (oidc-direct)
 
-Your repo's subjects must be on the federated role for the Bedrock account, in immutable-ID form, with explicit `:pull_request` (and `:ref:refs/heads/<default>` for mentions). **Never `:*`.** See TRI-56232.
+The Bedrock role must list your repo in its `github:` subjects, in immutable-ID form, with explicit `:pull_request` (and `:ref:refs/heads/<default>` for mentions). **Never `:*`.** In infrastructure/pulumi-cross-account:
+
+```bash
+./tools/manage.py add repo <account-id> <org>/<repo> --role ClaudeCodeBedrockGHA --pull-request
+./tools/manage.py add repo <account-id> <org>/<repo> --role ClaudeCodeBedrockGHA
+```
+
+The repo then reaches the Bedrock role and nothing else in that account. Until the trust is deployed, the "Bedrock role (direct OIDC)" step fails with `Not authorized to perform sts:AssumeRoleWithWebIdentity`. There's no fallback to the federated chain.
+
+`oidc` is the earlier route through the shared-services federated role, kept for existing callers. Its subjects go on the federated role, which reaches every OIDC role in the account, and those federated roles are being retired. See TRI-56232 and TRI-56950.
 
 Add a CODEOWNERS entry so that `.github/**`, `CLAUDE.md` and `.claude/**` need a human owner's review.

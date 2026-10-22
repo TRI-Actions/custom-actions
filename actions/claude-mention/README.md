@@ -6,7 +6,7 @@ Answers `@claude <question>` on issues and PR comments using Claude Code on Bedr
 
 ## Inputs
 
-`aws-auth` (`oidc` | `runner`), `account-id`, `target-role-name`, `federated-role-name`, `region`, `model`, `max-turns`, `runner-bedrock-role-arn`, `allow-runner-credentials`, `allow-shared-federated-role`, `github-token`. These have the same meanings and defaults as claude-review. In particular, `runner` needs `runner-bedrock-role-arn` (or the explicit `allow-runner-credentials` opt-in), `github-token` must be the job token, and team callers pass their own `account-id`.
+`aws-auth` (`oidc-direct` | `oidc` | `runner`), `account-id`, `target-role-name`, `federated-role-name`, `region`, `model`, `max-turns`, `runner-bedrock-role-arn`, `allow-runner-credentials`, `allow-shared-federated-role`, `github-token`. These have the same meanings and defaults as claude-review. In particular, `runner` needs `runner-bedrock-role-arn` (or the explicit `allow-runner-credentials` opt-in), `github-token` must be the job token, and team callers pass their own `account-id`.
 
 ## Example: github.com
 
@@ -39,9 +39,9 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: TRI-Actions/custom-actions/actions/claude-mention@<sha>
+      - uses: TRI-Actions/custom-actions/actions/claude-mention@d4c9a5d9ea1d3548adf31dc5151f9d92fb9e67d9 # claude-mention/v0.1.0
 ```
 
 On GHES, use the CodeBuild `runs-on` label, drop `id-token: write`, and pass `aws-auth: runner` with `runner-bedrock-role-arn`.
 
-For oidc, mention runs on `issue_comment` and `issues` arrive with subject `…:ref:refs/heads/<default>`, so the federated role needs that subject. `:*` isn't needed.
+Mention runs on `issue_comment` and `issues` arrive with subject `…:ref:refs/heads/<default>`, and inline comments with `…:pull_request`, so the Bedrock role (oidc-direct) or the federated role (oidc) needs both. `:*` isn't needed.

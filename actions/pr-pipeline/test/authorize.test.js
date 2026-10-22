@@ -167,7 +167,7 @@ test('approval on an older SHA does not authorize', async () => {
   assert.equal(core.outputs.via, '');
   assert.equal(
     core.outputs.reason,
-    'Not authorized: `carol` is not an active member of team `TRI-IE/ie`, and the head commit `aaaaaaa` has no approval from a reviewer with write access (other than the PR author and the authors and committers of its commits).',
+    'Not authorized: `carol` is not an active member of team `TRI-IE/ie`, and the head commit `aaaaaaa` has no approval from a reviewer with write access who is not the PR author and did not author or commit changes in the PR (an approval of an earlier commit does not count).',
   );
   assert.deepEqual(
     github.calls.permissions.map((call) => call.username),
@@ -279,7 +279,7 @@ test('approver who authored the head commit is excluded', async () => {
   });
   assert.deepEqual(core.failures, []);
   assert.equal(core.outputs.authorized, 'false');
-  assert.match(core.outputs.reason, /other than the PR author and the authors and committers of its commits/);
+  assert.match(core.outputs.reason, /who is not the PR author and did not author or commit changes in the PR/);
   assert.deepEqual(
     github.calls.permissions.map((call) => call.username),
     ['carol'],
@@ -554,6 +554,31 @@ test('with approver-teams, an approval of an older SHA by a team member does not
     permissions: { carol: WRITE, bob: WRITE },
   });
   assert.equal(core.outputs.authorized, 'false');
+});
+
+test('with approver-teams, a team member who has commits in the PR still approves', async () => {
+  // bob authored a commit, committed a rebase and clicked "Update branch"; the PR's commits are not even read
+  const { github, core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'ie' }), {
+    teams: { ie: { bob: 'active' } },
+    reviews: [review(1, 'bob', 'APPROVED')],
+    commits: [commit(OLD, 'bob'), commit(OLD, 'dave', 'bob'), commit(HEAD, 'bob', null)],
+    permissions: { carol: WRITE, bob: WRITE },
+  });
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'true');
+  assert.equal(core.outputs.via, 'approval:bob');
+  assert.equal(github.calls.commits.length, 0);
+});
+
+test('with approver-teams, the PR author does not approve even as a team member', async () => {
+  const { core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'ie' }), {
+    teams: { ie: { dave: 'active' } },
+    reviews: [review(1, 'dave', 'APPROVED')],
+    permissions: { carol: WRITE, dave: WRITE },
+  });
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'false');
+  assert.match(core.outputs.reason, /no approval from a member of team `TRI-IE\/ie` with write access who is not the PR author \(/);
 });
 
 test('with approver-teams, a team API error for an approver fails closed', async () => {
