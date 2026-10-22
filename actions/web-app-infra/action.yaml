@@ -27,6 +27,10 @@ inputs:
   JFrog_Token:
     description: "Location of JFrog Token in SSM"
     required: false
+  JFrog_oidc_provider:
+    description: "JFrog OIDC provider name (e.g. ie-tf-modules). When set, terraform init downloads JFrog registry modules with a short-lived token from the job's GitHub OIDC token; the calling job needs id-token: write"
+    required: false
+    default: ''
   environment:
     description: "Target environment name (e.g., dev, staging, prod). When omitted, environment is inferred from PR label (legacy behavior for multi-branch model)."
     required: false
@@ -439,6 +443,23 @@ runs:
       run: terraform fmt -check
       continue-on-error: false
       working-directory: terraform
+
+    # Right before init, because the JFrog token is short-lived and before_scripts can take long.
+    # write-netrc is off so the JFrog PyPI login written above stays in ~/.netrc.
+    - name: Get a JFrog token for the Terraform registry
+      if: ${{ inputs.JFrog_oidc_provider != '' }}
+      id: jfrog_registry
+      uses: TRI-Actions/custom-actions/actions/get-jfrog-credentials@main
+      with:
+        oidc-provider: ${{ inputs.JFrog_oidc_provider }}
+        write-netrc: 'false'
+
+    - name: Log Terraform in to the JFrog registry
+      if: ${{ inputs.JFrog_oidc_provider != '' }}
+      shell: bash
+      env:
+        TOKEN: ${{ steps.jfrog_registry.outputs.access-token }}
+      run: echo "TF_TOKEN_toyotaresearchinstitute_jfrog_io=$TOKEN" >> "$GITHUB_ENV"
 
     - name: Terraform Init
       id: init

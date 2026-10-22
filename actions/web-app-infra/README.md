@@ -49,11 +49,17 @@ AWS_IAM_Role:
     description: "Location of pat token in SSM"
     required: false
     type: String
+  JFrog_oidc_provider:
+    description: "JFrog OIDC provider name, e.g. ie-tf-modules"
+    required: false
+    type: String
 ```
 
 If no IAM role is set, it will use whatever is set by default by the runner executing the deployment.
 SSM_private keys can have multiple key locations separated by a comma. Private keys are keys used to facilitate github repo retrieval.
 SSM_pat can only use one personal access token location. PAT is used to facilitate github repo retrieval.
+JFrog_oidc_provider lets `terraform init` download modules from the JFrog Terraform registry (`toyotaresearchinstitute.jfrog.io/ie-tf-modules-aws__modules/<name>/aws`) without an SSH key.
+The job exchanges its GitHub OIDC token for a short-lived JFrog token right before `terraform init`, so the calling job needs `permissions: id-token: write` and a JFrog identity mapping for the repository in TRI-IE/jfrog-access.
 
 All parameters may be omitted or used as needed.
 
