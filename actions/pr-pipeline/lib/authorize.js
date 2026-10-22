@@ -2,9 +2,10 @@
 
 // Decides whether the author of a PR comment command may run it: either via active
 // membership in one of the given teams, or, when the commenter has write access, via an
-// approval of the PR head commit by a reviewer with write access who is neither the PR
-// author nor an author or committer of any commit in the PR. When approver teams are set,
-// the reviewer must also be an active member of one of them.
+// approval of the PR head commit by a reviewer with write access who is not the PR author.
+// When approver teams are set, the reviewer must be an active member of one of them, and
+// commits of their own in the PR do not matter: the approval of the head covers them.
+// Without approver teams, authors and committers of commits in the PR do not count.
 // Pure helpers are exported for unit tests; run() is the github-script entry point.
 
 const QUALIFYING_ROLES = new Set(['admin', 'maintain', 'write']);
@@ -128,11 +129,11 @@ function denialReason({ actor, org, teams, approverTeams = [], allowApproval, sh
     const reviewer = approverTeams.length
       ? `a member of ${approverTeams.length === 1 ? 'team' : 'one of the teams'} ${approverTeams
           .map((team) => `\`${org}/${team}\``)
-          .join(', ')} with write access`
-      : 'a reviewer with write access';
+          .join(', ')} with write access who is not the PR author`
+      : 'a reviewer with write access who is not the PR author and did not author or commit changes in the PR';
     approvalPart =
       `the head commit \`${sha.slice(0, 7)}\` has no approval from ${reviewer} ` +
-      '(other than the PR author and the authors and committers of its commits)';
+      '(an approval of an earlier commit does not count)';
   }
   return `Not authorized: ${teamPart}, and ${approvalPart}.`;
 }
@@ -241,17 +242,21 @@ async function run({ github, context, core, env }) {
       return;
     }
 
-    let commits;
-    try {
-      commits = await github.paginate(github.rest.pulls.listCommits, {
-        owner,
-        repo,
-        pull_number: prNumber,
-        per_page: 100,
-      });
-    } catch (err) {
-      failClosed(`authorize: listing commits for PR #${prNumber} failed (${describeError(err)})`);
-      return;
+    // Approver team members may have commits of their own in the PR, so the commits are only
+    // needed without approver teams.
+    let commits = [];
+    if (!approverTeams.length) {
+      try {
+        commits = await github.paginate(github.rest.pulls.listCommits, {
+          owner,
+          repo,
+          pull_number: prNumber,
+          per_page: 100,
+        });
+      } catch (err) {
+        failClosed(`authorize: listing commits for PR #${prNumber} failed (${describeError(err)})`);
+        return;
+      }
     }
     if (commits.length >= MAX_PR_COMMITS) {
       failClosed(

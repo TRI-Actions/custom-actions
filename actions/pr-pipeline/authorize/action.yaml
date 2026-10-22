@@ -1,5 +1,5 @@
 name: 'pr-pipeline/authorize'
-description: 'Authorizes a PR comment command via team membership, or for a commenter with write access via an approval of the head commit by a reviewer with write access who did not author or commit to the PR'
+description: 'Authorizes a PR comment command via team membership, or for a commenter with write access via an approval of the head commit by a reviewer with write access who is not the PR author'
 
 inputs:
   github-token:
@@ -18,7 +18,7 @@ inputs:
     required: false
     default: ''
   approver-teams:
-    description: 'Comma-separated team slugs; when set, an approval only counts if the reviewer is also an active member of one of them (empty: any reviewer with write access)'
+    description: 'Comma-separated team slugs; when set, an approval only counts if the reviewer is also an active member of one of them, whose own commits in the PR then do not matter (empty: any reviewer with write access who did not author or commit to the PR)'
     required: false
     default: ''
   org:
@@ -26,7 +26,7 @@ inputs:
     required: false
     default: ${{ github.repository_owner }}
   allow-approval:
-    description: 'Also authorize a commenter with write access when the head commit is approved by a reviewer with write access who is not the PR author and did not author or commit any commit in the PR (true/false)'
+    description: 'Also authorize a commenter with write access when the head commit is approved by a reviewer with write access who is not the PR author; see approver-teams for commits of the reviewer (true/false)'
     required: false
     default: 'true'
   sha:

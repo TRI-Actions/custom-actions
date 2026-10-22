@@ -81,11 +81,12 @@ The actor is the commenter (`github.event.comment.user.login`).
 A deploy command is authorized only in one of two ways:
 
 - The commenter is an active member of one of the configured teams.
-- The commenter has the `admin`, `maintain` or `write` role, and the exact head SHA has an approval from a reviewer who also has one of those roles, is not the PR author, and did not author or commit any commit in the PR.
-  With `approver-teams`, the reviewer must also be an active member of one of those teams.
+- The commenter has the `admin`, `maintain` or `write` role, and the exact head SHA has an approval from a reviewer who also has one of those roles and is not the PR author.
+  With `approver-teams`, the reviewer must also be an active member of one of those teams, and may have authored or committed commits in the PR, such as an "Update branch" merge or a fix: the approval of the head covers them.
+  Without `approver-teams`, a reviewer who authored or committed any commit in the PR does not count.
 
 An approval of an older commit does not count, and neither does an approval that was dismissed or that the reviewer followed with a change request.
-`web-flow`, the committer of commits made in the GitHub web UI, is ignored, so clicking "Update branch" excludes only the user who clicked it.
+`web-flow`, the committer of commits made in the GitHub web UI, is ignored, so without `approver-teams` clicking "Update branch" excludes only the user who clicked it.
 A re-run by anyone other than the commenter is rejected (`authorize` compares `triggering-actor`, which defaults to `${{ github.triggering_actor }}`), because a re-run of an old `!deploy` would resolve today's head under the original commenter's authority.
 A plan that finished after the command was posted is rejected (`plan-gate` with `not-after: ${{ github.event.comment.created_at }}`), because the commenter could not have reviewed it.
 
