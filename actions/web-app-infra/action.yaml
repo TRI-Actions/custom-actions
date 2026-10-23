@@ -59,8 +59,10 @@ runs:
     # happens here. The SSM parameters read in the Git & Artifact Auth section
     # below live in the shared services account, so they must be read before
     # the credentials are swapped for the target account role.
+    # Skipped when no SSM parameter is requested: the target account role is
+    # assumed on its own further down, so there is nothing to use the hop for.
     - name: Sign into federated role in shared services account (OIDC)
-      if: ${{ inputs.Target_Account != '' }}
+      if: ${{ inputs.Target_Account != '' && (inputs.SSM_private_keys != '' || inputs.SSM_pat != '' || inputs.JFrog_user != '' || inputs.JFrog_Token != '') }}
       uses: aws-actions/configure-aws-credentials@v6.2.0
       with:
         role-to-assume: arn:aws:iam::371027173325:role/GHAFederatedRole-${{ inputs.Target_Account }}
