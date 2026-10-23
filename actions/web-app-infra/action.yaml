@@ -28,7 +28,7 @@ inputs:
     description: "Location of JFrog Token in SSM"
     required: false
   JFrog_oidc_provider:
-    description: "JFrog OIDC provider name (e.g. ie-tf-modules). When set, terraform init downloads JFrog registry modules with a short-lived token from the job's GitHub OIDC token; the calling job needs id-token: write"
+    description: "JFrog OIDC provider of the repository's GitHub org (e.g. tri-rse for TRI-RSE). When set, terraform init downloads JFrog registry modules with a short-lived token from the job's GitHub OIDC token; the calling job needs id-token: write"
     required: false
     default: ''
   environment:
