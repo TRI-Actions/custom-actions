@@ -61,6 +61,7 @@ SSM_pat can only use one personal access token location. PAT is used to facilita
 JFrog_oidc_provider lets `terraform init` download modules from the JFrog Terraform registry (`toyotaresearchinstitute.jfrog.io/ie-tf-modules-aws__modules/<name>/aws`) without an SSH key.
 The job exchanges its GitHub OIDC token for a short-lived JFrog token right before `terraform init`, so the calling job needs `permissions: id-token: write` and a JFrog identity mapping for the repository in TRI-IE/jfrog-access.
 JFrog has one OIDC provider per GitHub org (`tri-rse`, `tri-mac`, `tri-amdd`, `ie-tf-modules` for TRI-IE), and a token is only accepted by its own org's provider.
+This works on github.com runners. GitHub Enterprise has a `github-enterprise` provider, but no GHES repository has completed the token exchange yet: JFrog has to reach the internal GHES token issuer (see the TRI-IE/jfrog-access RUNBOOK, "Onboarding GHES").
 
 All parameters may be omitted or used as needed.
 
