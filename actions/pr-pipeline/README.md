@@ -83,6 +83,7 @@ A deploy command is authorized only in one of two ways:
 - The commenter is an active member of one of the configured teams.
 - The commenter has the `admin`, `maintain` or `write` role, and the exact head SHA has an approval from a reviewer who also has one of those roles and is not the PR author.
   With `approver-teams`, the reviewer must also be an active member of one of those teams, and may have authored or committed commits in the PR, such as an "Update branch" merge or a fix: the approval of the head covers them.
+  Use as `approver-teams` only a team trusted to deploy on its own, because its members can approve their own commits.
   Without `approver-teams`, a reviewer who authored or committed any commit in the PR does not count.
 
 An approval of an older commit does not count, and neither does an approval that was dismissed or that the reviewer followed with a change request.
@@ -230,14 +231,19 @@ Bad configuration (for example `min-args` greater than `max-args`, or an empty o
 
 ### `authorize`
 
-Authorizes a PR comment command via team membership, or for a commenter with write access via an approval of the head commit by a reviewer with write access who did not author or commit to the PR.
+Authorizes a PR comment command via team membership, or for a commenter with write access via an approval of the head commit by a reviewer with write access who is not the PR author.
 When `triggering-actor` is not empty and differs from `actor` (case-insensitively), the command is denied before teams or approvals are checked.
 Teams are checked first, in the order given.
-For approvals, each reviewer's latest review that is not `COMMENTED` or `PENDING` counts, and only if it is `APPROVED` on exactly `sha` and the reviewer is neither the PR author nor the author or committer of any commit in the PR.
-`web-flow`, GitHub's committer for commits made in the web UI, is ignored, so clicking "Update branch" excludes only the user who clicked it.
-Commits whose author or committer is not linked to a GitHub account cannot be attributed and exclude no one.
-Commit authorship comes from git metadata, which whoever pushes a commit can set to anyone's email, so this exclusion stops honest self-approval but not a deliberately forged commit; only signed commits or the ruleset rule "Require approval of the most recent reviewable push" close that fully.
-The GitHub API lists at most 250 commits of a PR, so a PR with 250 or more commits fails the step instead of being evaluated on a partial list.
+For approvals, each reviewer's latest review that is not `COMMENTED` or `PENDING` counts, and only if it is `APPROVED` on exactly `sha` and the reviewer is not the PR author.
+Without `approver-teams`, the reviewer must also not be the author or committer of any commit in the PR:
+
+- `web-flow`, GitHub's committer for commits made in the web UI, is ignored, so clicking "Update branch" excludes only the user who clicked it.
+- Commits whose author or committer is not linked to a GitHub account cannot be attributed and exclude no one.
+- Commit authorship comes from git metadata, which whoever pushes a commit can set to anyone's email, so this exclusion stops honest self-approval but not a deliberately forged commit; only signed commits or the ruleset rule "Require approval of the most recent reviewable push" close that fully.
+- The GitHub API lists at most 250 commits of a PR, so a PR with 250 or more commits fails the step instead of being evaluated on a partial list.
+
+With `approver-teams`, the PR's commits are not read, so a member of those teams can approve a head that contains their own commits, and can then run the command themselves.
+Use as `approver-teams` only a team whose members are trusted to deploy on their own, in practice the same team as in `teams`.
 The reviewer must have the `admin`, `maintain` or `write` role; custom repository roles do not qualify.
 Approval-based authorization also requires the commenter to have the `admin`, `maintain` or `write` role, which is checked before reviews are read.
 Once the head commit has a qualifying approval, any such commenter is authorized.
@@ -251,9 +257,9 @@ A denial sets `authorized=false` and `reason` without failing the step; an API e
 | `actor` | yes | - | Login of the comment author |
 | `triggering-actor` | no | `${{ github.triggering_actor }}` | Login that triggered the run; must equal actor (case-insensitive), which blocks re-runs of another user's command; pass an empty string to skip the check |
 | `teams` | no | `''` | Comma-separated team slugs whose active members are authorized (may be empty) |
-| `approver-teams` | no | `''` | Comma-separated team slugs; when set, an approval only counts if the reviewer is also an active member of one of them (empty: any reviewer with write access) |
+| `approver-teams` | no | `''` | Comma-separated team slugs; when set, an approval only counts if the reviewer is also an active member of one of them, whose own commits in the PR then do not matter (empty: any reviewer with write access who did not author or commit to the PR) |
 | `org` | no | `${{ github.repository_owner }}` | Organization that owns the teams and the approver teams |
-| `allow-approval` | no | `true` | Also authorize a commenter with write access when the head commit is approved by a reviewer with write access who is not the PR author and did not author or commit any commit in the PR (true/false) |
+| `allow-approval` | no | `true` | Also authorize a commenter with write access when the head commit is approved by a reviewer with write access who is not the PR author; see approver-teams for commits of the reviewer (true/false) |
 | `sha` | no | `''` | Full PR head commit SHA (required when allow-approval is true) |
 | `pr-author` | no | `''` | Login of the PR author (required when allow-approval is true) |
 | `pr-number` | no | `''` | PR number (required when allow-approval is true) |

@@ -456,17 +456,26 @@ runs:
         oidc-provider: ${{ inputs.JFrog_oidc_provider }}
         write-netrc: 'false'
 
+    # TF_TOKEN_<host> authenticates the registry lookups. terraform init fetches the module
+    # archives with netrc credentials instead, so init gets its own netrc with the same token,
+    # whatever ~/.netrc holds for JFrog (for example the PyPI login above).
     - name: Log Terraform in to the JFrog registry
       if: ${{ inputs.JFrog_oidc_provider != '' }}
       shell: bash
       env:
         TOKEN: ${{ steps.jfrog_registry.outputs.access-token }}
-      run: echo "TF_TOKEN_toyotaresearchinstitute_jfrog_io=$TOKEN" >> "$GITHUB_ENV"
+        JF_USER: ${{ steps.jfrog_registry.outputs.username }}
+      run: |
+        echo "TF_TOKEN_toyotaresearchinstitute_jfrog_io=$TOKEN" >> "$GITHUB_ENV"
+        (umask 077 && printf 'machine toyotaresearchinstitute.jfrog.io\n  login %s\n  password %s\n' "$JF_USER" "$TOKEN" > "$RUNNER_TEMP/terraform-registry.netrc")
 
     - name: Terraform Init
       id: init
       shell: bash
-      run: terraform init
+      run: |
+        # Only when the JFrog registry login above ran; otherwise ~/.netrc, as before.
+        if [ -s "$RUNNER_TEMP/terraform-registry.netrc" ]; then export NETRC="$RUNNER_TEMP/terraform-registry.netrc"; fi
+        terraform init
       working-directory: terraform
 
     - name: Terraform Validate
