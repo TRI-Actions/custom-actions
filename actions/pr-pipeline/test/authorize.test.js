@@ -557,7 +557,7 @@ test('with approver-teams, an approval of an older SHA by a team member does not
 });
 
 test('with approver-teams, a team member who has commits in the PR still approves', async () => {
-  // bob authored a commit, committed a rebase and clicked "Update branch"; the PR's commits are not even read
+  // bob authored a commit, committed a rebase and made the head commit; the PR's commits are not even read
   const { github, core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'ie' }), {
     teams: { ie: { bob: 'active' } },
     reviews: [review(1, 'bob', 'APPROVED')],
@@ -568,6 +568,48 @@ test('with approver-teams, a team member who has commits in the PR still approve
   assert.equal(core.outputs.authorized, 'true');
   assert.equal(core.outputs.via, 'approval:bob');
   assert.equal(github.calls.commits.length, 0);
+});
+
+test('with approver-teams, a team member can approve their own commits and run the command', async () => {
+  // The documented trust assumption: bob is not in `teams`, but as an approver-team member his
+  // approval of a head he committed himself authorizes his own command.
+  const { github, core } = await authorize(
+    baseEnv({ PRP_ACTOR: 'bob', PRP_TRIGGERING_ACTOR: 'bob', PRP_TEAMS: 'deployers', PRP_APPROVER_TEAMS: 'ie' }),
+    {
+      teams: { ie: { bob: 'active' } },
+      reviews: [review(1, 'bob', 'APPROVED')],
+      commits: [commit(OLD, 'dave'), commit(HEAD, 'bob')],
+      permissions: { bob: WRITE },
+    },
+  );
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'true');
+  assert.equal(core.outputs.via, 'approval:bob');
+  assert.equal(github.calls.commits.length, 0);
+});
+
+test('with approver-teams, a PR with 250 or more commits is still evaluated', async () => {
+  const many = Array.from({ length: 250 }, (_, i) => commit(i === 249 ? HEAD : String(i).padStart(40, '0'), 'dave'));
+  const { core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: 'ie' }), {
+    teams: { ie: { bob: 'active' } },
+    reviews: [review(1, 'bob', 'APPROVED')],
+    commits: many,
+    permissions: { carol: WRITE, bob: WRITE },
+  });
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'true');
+  assert.equal(core.outputs.via, 'approval:bob');
+});
+
+test('approver-teams with only separators counts as empty, so commit authors are excluded', async () => {
+  const { github, core } = await authorize(baseEnv({ PRP_APPROVER_TEAMS: ' , ' }), {
+    reviews: [review(1, 'bob', 'APPROVED')],
+    commits: [commit(OLD, 'dave'), commit(HEAD, 'bob')],
+    permissions: { carol: WRITE, bob: WRITE },
+  });
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'false');
+  assert.equal(github.calls.commits.length, 1);
 });
 
 test('with approver-teams, the PR author does not approve even as a team member', async () => {
