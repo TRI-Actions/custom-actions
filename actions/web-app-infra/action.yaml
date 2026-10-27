@@ -271,11 +271,13 @@ runs:
             return;
           }
 
-          const { data: labels } = await github.rest.issues.listLabelsOnIssue({
+          const { data: allLabels } = await github.rest.issues.listLabelsOnIssue({
             owner: context.repo.owner,
             repo: context.repo.repo,
             issue_number: context.issue.number,
           });
+          // deploy-incomplete-<env> is set by the deploy itself (see below), never an environment.
+          const labels = allLabels.filter(label => !label.name.startsWith('deploy-incomplete-'));
           // We should check if the label is correct too.
           // It should be an environment name and if not we can send a comment to warn users that they added a wrong label
           if (labels.length == 0) {
@@ -305,6 +307,33 @@ runs:
             completed_at: formatDate(),
             conclusion: '${{ steps.get-label.conclusion }}'
           })
+
+    # A PR keeps deploy-incomplete-<env> when its deploy applied but did not merge, so AWS has
+    # changes its base branch doesn't, and a deploy from any other PR would silently undo them.
+    - name: Refuse to deploy over an incomplete deploy
+      if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const env = '${{ steps.get-label.outputs.environment }}';
+          const marker = `deploy-incomplete-${env}`;
+          const others = (await github.paginate(github.rest.issues.listForRepo, {
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            labels: marker,
+            state: 'all',
+          })).filter(issue => issue.number !== context.issue.number);
+          if (others.length) {
+            const prs = others.map(issue => `#${issue.number}`).join(', ');
+            const body = `❌ Deploy refused: ${prs} applied to ${env} but did not merge, so deploying this PR would undo those changes. Re-deploy ${prs}, or remove its \`${marker}\` label once AWS matches the base branch again.`;
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });
+            core.setFailed(body);
+          }
 
     - name: Parse manifest file
       id: parse-yaml
@@ -612,6 +641,20 @@ runs:
           })
           core.setOutput('CHECK_ID', check.data.id)
 
+    # Removed only after a successful merge, so a deploy that fails or is cancelled from here
+    # on blocks deploys from other PRs (see "Refuse to deploy over an incomplete deploy").
+    - name: Mark the deploy as incomplete
+      if: ${{ github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') }}
+      uses: actions/github-script@v7
+      with:
+        script: |
+          await github.rest.issues.addLabels({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: context.issue.number,
+            labels: ['deploy-incomplete-${{ steps.get-label.outputs.environment }}'],
+          });
+
     - name: Terraform - Apply
       if: ${{ (github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy')) || (github.event_name == 'workflow_dispatch' && contains(fromJSON('["true", true]'), env.triggeredByComment)) }}
       id: apply
@@ -775,6 +818,7 @@ runs:
         script: |
             // GitHub refuses the merge when the PR head is no longer the applied commit.
             const sha = '${{ steps.sha.outputs.sha }}';
+            const marker = 'deploy-incomplete-${{ steps.get-label.outputs.environment }}';
             try {
               await github.rest.pulls.merge({
                 owner: context.repo.owner,
@@ -787,7 +831,18 @@ runs:
                 issue_number: context.issue.number,
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                body: `❌ ${sha} was applied but the PR was not merged: ${error.message}`
+                body: `❌ ${sha} was applied but the PR was not merged: ${error.message}\nOther PRs can't deploy until this one is re-deployed or its \`${marker}\` label is removed.`
               });
               core.setFailed(`Merge failed: ${error.message}`);
+              return;
+            }
+            try {
+              await github.rest.issues.removeLabel({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                name: marker,
+              });
+            } catch (error) {
+              if (error.status !== 404) throw error;
             }
