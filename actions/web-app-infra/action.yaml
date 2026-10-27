@@ -43,10 +43,26 @@ inputs:
 runs:
   using: composite
   steps:
+    # Resolved once, first: a deploy checks out, compares and merges this commit,
+    # so commits pushed while it runs are never merged without being applied.
+    - name: Get Head Sha
+      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
+      id: sha
+      uses: actions/github-script@v7
+      with:
+        script: |
+          const pr = await github.rest.pulls.get({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            pull_number: context.issue.number
+          });
+          const headSha = pr.data.head.sha;
+          core.setOutput('sha', headSha)
+
     - name: Check out repository code
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.issue.pull_request && format('refs/pull/{0}/head', github.event.issue.number) || '' }}
+        ref: ${{ github.event.issue.pull_request && steps.sha.outputs.sha || '' }}
 
     ##############################################
     #                                            #
@@ -183,13 +199,14 @@ runs:
             base = pr.base.ref;
           }
 
-          console.log(`Comparing ${base}...${head}`);
+          const headSha = '${{ steps.sha.outputs.sha }}';
+          console.log(`Comparing ${base}...${head} (${headSha})`);
 
           const result = await github.rest.repos.compareCommits({
             owner: context.repo.owner,
             repo: context.repo.repo,
             base,
-            head,
+            head: headSha,
           });
 
           if (result.data.status === 'behind' || result.data.status === 'diverged') {
@@ -210,20 +227,6 @@ runs:
       with:
         terraform_wrapper: true
         terraform_version: 1.14.9
-
-    - name: Get Head Sha
-      if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
-      id: sha
-      uses: actions/github-script@v7
-      with:
-        script: |
-          const pr = await github.rest.pulls.get({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            pull_number: context.issue.number
-          });
-          const headSha = pr.data.head.sha;
-          core.setOutput('sha', headSha)
 
     - name: Create  config status check
       if: ${{ github.event_name == 'pull_request' || github.event_name == 'issue_comment' }}
@@ -770,8 +773,21 @@ runs:
       if: ${{ job.status == 'success' && github.event.issue.pull_request && startsWith(github.event.comment.body, 'GithubDeploy') }}
       with:
         script: |
-            github.rest.pulls.merge({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-            });
+            // GitHub refuses the merge when the PR head is no longer the applied commit.
+            const sha = '${{ steps.sha.outputs.sha }}';
+            try {
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: context.issue.number,
+                sha,
+              });
+            } catch (error) {
+              await github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `❌ ${sha} was applied but the PR was not merged: ${error.message}`
+              });
+              core.setFailed(`Merge failed: ${error.message}`);
+            }
