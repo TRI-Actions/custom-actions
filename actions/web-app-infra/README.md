@@ -74,6 +74,15 @@ The **plan** step runs with `-lock=false`. It reads state without acquiring the 
 
 The **apply** step acquires the lock normally via `terraform apply`. If it encounters an existing lock it will fail with Terraform's standard lock error, which includes the lock ID, operation type, and timestamp — use those to determine whether the lock is stale before force-unlocking manually.
 
+## Incomplete deploys
+
+A `GithubDeploy` adds the label `deploy-incomplete-<env>` (for example `deploy-incomplete-staging`) to its PR right before `terraform apply`, and removes it after the PR is merged.
+If the apply, the after_scripts or the merge fails, or the run is cancelled, the label stays: AWS then has changes that the base branch doesn't, and a deploy from any other PR would undo them.
+While any other PR, open or closed, has the label for the same environment, `GithubDeploy` is refused with a comment that links it.
+The labeled PR can still deploy, so fix it and comment `GithubDeploy` again, or push a revert to it and deploy that.
+Remove the label by hand only once AWS matches the base branch again.
+The label is never taken as the PR's environment.
+
 ## How to use in Github Actions Workflow:
 
 ```
