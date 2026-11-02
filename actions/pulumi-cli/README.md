@@ -16,12 +16,15 @@ There are two parameters required to use this action:
 * `update_state`: Option to update only state to match the infrastructure. Default value is `false`
 * `stack`: Pulumi stack that `plan` and `deploy` select in each workdir, creating it if it does not exist. Default value is `main`. `destroy` does not select a stack, and `status` always reads the `main` stack.
 * `backend`: Pulumi state backend URL to log in to, e.g. `s3://tri-pulumi-state-us-east-1/pulumi-iam`. Default is empty, which means `s3://tri-pulumi-state-us-east-1/<repository name>`.
+* `fail_fast`: `true` stops a `deploy` at the first workdir that fails, so the workdirs after it are not run. Default value is `false`. `plan` and `destroy` ignore it.
 
 ## Failure behaviour
 
 Any Pulumi error fails the step. If you pass several workdirs, all of them are still
 attempted - one failing stack does not stop the rest - and the step fails at the end
 with a table in the job summary showing which workdirs succeeded and which did not.
+With `fail_fast: true`, a `deploy` stops at the first failing workdir instead: the ones
+after it are listed as not run, and they have no `deploy.out`.
 
 The `*.out` files are still written for failed runs, so you can upload them as artifacts
 or post them to a PR comment regardless of the outcome.

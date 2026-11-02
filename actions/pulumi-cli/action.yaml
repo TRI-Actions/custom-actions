@@ -19,6 +19,9 @@ inputs:
   backend:
     description: 'Pulumi state backend URL to log in to. Empty means s3://tri-pulumi-state-us-east-1/<repository name>.'
     default: ''
+  fail_fast:
+    description: "'true' to stop a deploy at the first failed workdir, so the rest are not run. Only used by deploy."
+    default: 'false'
 
 outputs:
   status:
@@ -76,6 +79,7 @@ runs:
       env:
         WORKDIRS: ${{ inputs.workdirs }}
         UPDATE_STATE: ${{ inputs.update_state }}
+        FAIL_FAST: ${{ inputs.fail_fast }}
         STACK_NAME: ${{ inputs.stack }}
         BACKEND_URL: ${{ inputs.backend }}
         OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt
