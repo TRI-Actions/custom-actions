@@ -34,6 +34,7 @@ Put review guidance for your repo in **`.github/claude-review.md`** on your **de
 - It can't repeat the prompt's own framing or output markers (`Repository-specific guidance`, `structured summary`, `structured_output`, `json-schema`, `the schema requires`, `EOF_`, case-insensitive). A file containing any of them fails the review (`blocked`).
 - Its SHA-256, and the SHA-256 of the full prompt, are recorded in `verdict.json` as `guidance_sha256` and `prompt_sha256`.
 - It's instructions to the model only. It can't change tools, flags, or what the verdict means.
+- Both review types share one rating scale: rate by the harm if the concern is real, not by confidence. A rule here can raise a rating; when two rules rate one finding differently, the higher rating wins. So a "weakened check is HIGH" rule beats a "leave a LOW question" rule.
 
 This protects the prompt, not the pipeline: your workflow file still runs from the PR head. Anything that gates on the verdict must still refuse PRs touching `.github/`, `CLAUDE.md`, `.claude/` or `.mcp.json`, and check the head SHA.
 
