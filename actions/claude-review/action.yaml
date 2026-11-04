@@ -81,6 +81,13 @@ inputs:
       the runner role's own credentials -- which may be far broader than Bedrock -- into
       the model's process. A temporary, visible opt-in until the Bedrock-only role exists.
     default: "false"
+  allow-fork-prs:
+    description: >-
+      "true" lets the action run on pull_request_target, which is how it reviews PRs
+      from forks. Only the `labeled` event runs, the labeler needs write access, and the
+      PR must still be at the labeled commit. The caller filters on the label name and
+      should set no other pull_request_target types.
+    default: "false"
   github-token:
     description: >-
       Token for comments. Must be the job's own GITHUB_TOKEN: short-lived and limited to
@@ -104,13 +111,25 @@ outputs:
 runs:
   using: "composite"
   steps:
-    # Fails closed on anything but a same-repo pull_request. A draft is a skip, not a
-    # failure, so a draft PR does not show a red check.
+    # Fails closed on anything but a same-repo pull_request, or -- with allow-fork-prs --
+    # a pull_request_target `labeled` event from someone with write access. A draft is a
+    # skip, not a failure, so a draft PR does not show a red check.
+    #
+    # Why pull_request_target for forks, and not pull_request: under pull_request a fork's
+    # run uses the workflow file from the PR head, so the fork author picks the steps.
+    # Under pull_request_target the workflow comes from the default branch, and the PR is
+    # only data: the hardening below already treats every file in it as hostile (no Bash,
+    # no repo settings or hooks, config restored from the default branch).
     - name: Guard
       id: guard
       shell: bash
       env:
         EVENT: ${{ github.event_name }}
+        EVENT_ACTION: ${{ github.event.action }}
+        SENDER: ${{ github.event.sender.login }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        ALLOW_FORK: ${{ inputs.allow-fork-prs }}
         DRAFT: ${{ github.event.pull_request.draft }}
         HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
         REVIEW_TYPE: ${{ inputs.review-type }}
@@ -126,8 +145,16 @@ runs:
       run: |
         set -euo pipefail
         fail() { echo "::error::claude-review: $*"; exit 1; }
-        [ "$EVENT" = "pull_request" ] || fail "runs on pull_request only (got '$EVENT'); use claude-mention for comments"
-        [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || fail "head repository '$HEAD_REPO' is not '$GITHUB_REPOSITORY'; fork PRs are not reviewed"
+        case "$EVENT" in
+          pull_request)
+            [ "$HEAD_REPO" = "$GITHUB_REPOSITORY" ] || fail "head repository '$HEAD_REPO' is not '$GITHUB_REPOSITORY'; fork PRs are reviewed only on pull_request_target with allow-fork-prs" ;;
+          pull_request_target)
+            [ "$ALLOW_FORK" = "true" ] || fail "pull_request_target needs allow-fork-prs: \"true\""
+            # Only a label starts a review here: opened or synchronize would review every
+            # push from any fork with no one choosing to.
+            [ "$EVENT_ACTION" = "labeled" ] || fail "on pull_request_target, runs on the labeled event only (got '$EVENT_ACTION')" ;;
+          *) fail "runs on pull_request or pull_request_target only (got '$EVENT'); use claude-mention for comments" ;;
+        esac
         [[ "$REVIEW_TYPE" =~ ^(general|security)$ ]] || fail "review-type must be general or security"
         [[ "$AWS_AUTH" =~ ^(oidc-direct|oidc|runner)$ ]] || fail "aws-auth must be oidc-direct, oidc or runner"
         [[ "$MODEL" =~ ^us\.anthropic\.claude-[a-z0-9.-]+(:[0-9]+)?$ ]] || fail "model '$MODEL' is not a us.anthropic.claude-* inference profile"
@@ -148,6 +175,23 @@ runs:
         case "$TOKEN" in
           ghp_*|github_pat_*|gho_*|ghu_*) fail "github-token must be the job's GITHUB_TOKEN, not a personal or OAuth token" ;;
         esac
+        if [ "$EVENT" = "pull_request_target" ]; then
+          # gh defaults to github.com; on GHES that is HTTP 401.
+          export GH_TOKEN="$TOKEN" GH_HOST="${GITHUB_SERVER_URL#https://}"
+          [ "$GH_HOST" = "github.com" ] || export GH_ENTERPRISE_TOKEN="$TOKEN"
+          # Anyone with triage can add a label; starting a review takes write, as with
+          # claude-mention.
+          [[ "$SENDER" =~ ^[A-Za-z0-9-]{1,39}$ ]] || fail "labeler '$SENDER' is not a valid GitHub login"
+          perm=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${SENDER}/permission" --jq .permission 2>/dev/null) || perm=""
+          case "$perm" in
+            admin|maintain|write) echo "$SENDER has $perm on this repo" ;;
+            *) fail "$SENDER (repo permission '${perm:-unknown}') may not start a review" ;;
+          esac
+          # The review fetches the PR head when it runs, not the commit that was labeled.
+          # A push in between would be reviewed unseen by the labeler; refuse it.
+          now=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha) || fail "could not read PR #$PR_NUMBER"
+          [ "$now" = "$HEAD_SHA" ] || fail "PR #$PR_NUMBER moved from $HEAD_SHA to $now after it was labeled; label it again"
+        fi
         if [ "$DRAFT" = "true" ]; then
           echo "draft pull request; skipping review"
           echo "run=false" >> "$GITHUB_OUTPUT"
@@ -198,10 +242,14 @@ runs:
     # before any fetch (claude-code-action#1), so the token is never written into the
     # working tree. The read-deny list on the Review step is then defence in depth for
     # the token, and still the control for GITHUB_ENV and /proc.
+    #
+    # ref: under pull_request_target checkout defaults to the default branch; the labeled
+    # head SHA is the PR. Empty keeps the pull_request default.
     - name: Check out repository code
       if: steps.guard.outputs.run == 'true'
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
+        ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || '' }}
         fetch-depth: 0
         persist-credentials: false
         token: ${{ inputs.github-token }}
@@ -553,6 +601,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         PR_NUMBER: ${{ github.event.pull_request.number }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        EVENT: ${{ github.event_name }}
         EVENT_ACTION: ${{ github.event.action }}
         REVIEW_TYPE: ${{ inputs.review-type }}
         REVIEW_OUTCOME: ${{ steps.claude.outcome }}
@@ -571,14 +620,24 @@ runs:
                  | select(.original_commit_id == env.HEAD_SHA)
                  | select(.body | test(\"\\\\*\\\\*(CRITICAL|HIGH)\\\\b\"))] | length" 2>/dev/null || echo "-1")
 
+        # The review fetches the PR head itself when it starts, after the Guard checked it.
+        # Under pull_request_target, a push in that window means Claude read a commit no
+        # one labeled, and its comments would miss the HEAD_SHA filter above -- a false
+        # clean. Record what was actually reviewed.
+        REVIEWED=""
+        [ "$EVENT" != "pull_request_target" ] || REVIEWED=$(git rev-parse HEAD 2>/dev/null || echo unknown)
+
         d="$RUNNER_TEMP/claude-verdict"
         mkdir -p "$d"
-        OBSERVED="$OBSERVED" python3 - > "$d/verdict.json" <<'PY'
+        OBSERVED="$OBSERVED" REVIEWED="$REVIEWED" python3 - > "$d/verdict.json" <<'PY'
         import json, os
 
         def decide():
             if os.environ.get("REVIEW_OUTCOME") != "success":
                 return "blocked", "review did not complete"
+            reviewed = os.environ.get("REVIEWED", "")
+            if reviewed and reviewed != os.environ["HEAD_SHA"]:
+                return "blocked", f"reviewed {reviewed[:12]}, not the labeled commit {os.environ['HEAD_SHA'][:12]}; label it again"
             try:
                 s = json.loads(os.environ.get("STRUCTURED") or "")
                 crit, high = int(s["critical"]), int(s["high"])
@@ -695,6 +754,22 @@ runs:
         PY
         gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
           -F body=@"$RUNNER_TEMP/merged.md" -q .html_url
+
+    # A fork review is one deliberate act per commit: drop the label that started it, so a
+    # later review takes someone adding it again. Best effort; a failure here is a warning.
+    - name: Remove the triggering label
+      if: always() && github.event_name == 'pull_request_target' && github.event.action == 'labeled' && inputs.allow-fork-prs == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        LABEL: ${{ github.event.label.name }}
+      run: |
+        export GH_HOST="${GITHUB_SERVER_URL#https://}"
+        [ "$GH_HOST" = "github.com" ] || export GH_ENTERPRISE_TOKEN="$GH_TOKEN"
+        name=$(python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["LABEL"], safe=""))')
+        gh api --method DELETE "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/labels/${name}" >/dev/null \
+          || echo "::warning::claude-review: could not remove label '$LABEL'"
 
     # Credentials written to GITHUB_ENV outlive this action: every later step of the
     # caller's job would inherit them, including its upload step. Blank them on the way
