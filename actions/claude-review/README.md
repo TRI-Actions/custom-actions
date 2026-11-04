@@ -155,8 +155,7 @@ jobs:
     timeout-minutes: 25
     permissions:
       contents: read
-      pull-requests: write
-      issues: write
+      pull-requests: write   # comments and the label; issues: write isn't needed
     # Queue, don't cancel: a queued duplicate finds the label gone and skips.
     concurrency:
       group: claude-review-${{ github.event.pull_request.number }}
