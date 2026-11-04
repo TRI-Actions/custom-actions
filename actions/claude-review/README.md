@@ -25,6 +25,7 @@ Hardened, review-only Claude Code PR review on Bedrock. Works on github.com and 
 | `runner-bedrock-role-arn` | runner only. A Bedrock-only role assumed for the run (15-minute session, session policy limited to `bedrock:InvokeModel*`). **Required for `runner`** unless `allow-runner-credentials` is set | `""` |
 | `allow-runner-credentials` | runner only. `"true"` runs without `runner-bedrock-role-arn`, exporting the runner role's own credentials to the model's process. A temporary, visible opt-in | `"false"` |
 | `allow-fork-prs` | `"true"` lets the action run on `pull_request_target`, which is how it reviews PRs from forks. See [Fork PRs](#fork-prs-pull_request_target) | `"false"` |
+| `trigger-label` | `pull_request_target` only. The one label that starts a fork review; any other label fails the run | `claude-review` |
 | `github-token` | Must be the job's own `GITHUB_TOKEN`. Personal access tokens (`ghp_`, `github_pat_`) are rejected | `github.token` |
 
 ## Repo-specific guidance
@@ -62,7 +63,7 @@ These are fixed inside the action:
 - The caller's identity is checked against the expected role before the review starts.
 - Bun is installed before any credential is in the environment: the platform tarball is fetched from the public npm registry and checked against a pinned SHA-512. No npm install scripts run.
 - The AWS credentials the action exports are blanked when it finishes, so later steps in your job don't inherit them. Keep the job single-purpose anyway.
-- Only same-repo PRs on `pull_request`, or, with `allow-fork-prs`, a `pull_request_target` `labeled` event from someone with write access, with the PR still at the labeled commit. Anything else fails closed. Drafts are skipped.
+- Only same-repo PRs on `pull_request`, or, with `allow-fork-prs`, a `pull_request_target` `labeled` event for `trigger-label` from someone with write access, with the PR still at the labeled commit. Anything else fails closed. Drafts are skipped.
 - No commit status (forgeable) and no approval.
 
 Every `uses:` inside the action is on the GHES allowlist (`actions/*`, `aws-actions/*`, `TRI-Actions/*`).
@@ -156,6 +157,10 @@ jobs:
       contents: read
       pull-requests: write
       issues: write
+    # Queue, don't cancel: a queued duplicate finds the label gone and skips.
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     steps:
       - id: claude
         uses: TRI-Actions/custom-actions/actions/claude-review@<sha> # claude-review/<version>
@@ -175,7 +180,8 @@ Why this is safe to run on fork code:
 
 - `pull_request_target` runs the workflow from the **default branch**, so a fork can't change the steps. (Under `pull_request` a fork's run would use its own workflow file.) Edits to this file take effect only once merged.
 - The PR is read, never executed: no Bash, no repo settings, hooks or MCP servers, and `CLAUDE.md`/`.claude/` restored from the default branch. These are the same controls as for same-repo PRs.
-- The action checks that the labeler has write, maintain or admin access (anyone with triage can add a label) and that the PR head is still the labeled commit. If it isn't, the action comments on the PR asking for the label again. If a push lands while the review runs, the verdict is `blocked` ("reviewed X, not the labeled commit Y").
+- The action checks that the label is `trigger-label`, that the labeler has write, maintain or admin access at run time (anyone with triage can add a label), and that the PR head is still the labeled commit. If it isn't, the action comments on the PR asking for the label again. If a push lands while the review runs, the verdict is `blocked` ("reviewed X, not the labeled commit Y").
+- The label comes off when the run ends, pass or fail. A run that finds it already gone (a queued duplicate, or a re-run of a finished job) skips, so one label is one review. The review comment names the commit it reviewed.
 - Don't add steps that build, test or install anything from the PR to this job. With `pull_request_target`, those would run fork code with the base repo's token.
 
 For private and internal repos, GitHub documents the "Run workflows from fork pull requests" setting for `pull_request` only. Whether it also gates `pull_request_target` isn't documented; check on your instance before relying on it being off.
