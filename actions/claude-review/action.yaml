@@ -190,7 +190,14 @@ runs:
           # The review fetches the PR head when it runs, not the commit that was labeled.
           # A push in between would be reviewed unseen by the labeler; refuse it.
           now=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq .head.sha) || fail "could not read PR #$PR_NUMBER"
-          [ "$now" = "$HEAD_SHA" ] || fail "PR #$PR_NUMBER moved from $HEAD_SHA to $now after it was labeled; label it again"
+          if [ "$now" != "$HEAD_SHA" ]; then
+            # A failed check is easy to miss; say so on the PR. The label comes off in the
+            # last step either way.
+            gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -f body="Claude review skipped: new commits were pushed after the label was added (labeled \`${HEAD_SHA:0:12}\`, now \`${now:0:12}\`). Re-add the label to review the latest commit." >/dev/null \
+              || echo "::warning::claude-review: could not comment on PR #$PR_NUMBER"
+            fail "PR #$PR_NUMBER moved from $HEAD_SHA to $now after it was labeled; label it again"
+          fi
         fi
         if [ "$DRAFT" = "true" ]; then
           echo "draft pull request; skipping review"

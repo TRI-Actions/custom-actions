@@ -175,7 +175,7 @@ Why this is safe to run on fork code:
 
 - `pull_request_target` runs the workflow from the **default branch**, so a fork can't change the steps. (Under `pull_request` a fork's run would use its own workflow file.) Edits to this file take effect only once merged.
 - The PR is read, never executed: no Bash, no repo settings, hooks or MCP servers, and `CLAUDE.md`/`.claude/` restored from the default branch. These are the same controls as for same-repo PRs.
-- The action checks that the labeler has write, maintain or admin access (anyone with triage can add a label) and that the PR head is still the labeled commit. If a push lands while the review runs, the verdict is `blocked` ("reviewed X, not the labeled commit Y").
+- The action checks that the labeler has write, maintain or admin access (anyone with triage can add a label) and that the PR head is still the labeled commit. If it isn't, the action comments on the PR asking for the label again. If a push lands while the review runs, the verdict is `blocked` ("reviewed X, not the labeled commit Y").
 - Don't add steps that build, test or install anything from the PR to this job. With `pull_request_target`, those would run fork code with the base repo's token.
 
 For private and internal repos, GitHub documents the "Run workflows from fork pull requests" setting for `pull_request` only. Whether it also gates `pull_request_target` isn't documented; check on your instance before relying on it being off.
