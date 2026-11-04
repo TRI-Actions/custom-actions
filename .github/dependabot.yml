@@ -17,3 +17,8 @@ updates:
       # The fork carries upstream tags that lack the TRI patches; a bump to one would
       # silently drop them. Update it by rebasing the patches, then repin by hand.
       - dependency-name: "TRI-Actions/claude-code-action"
+      # GHES serves actions/checkout from its own copy of the actions org, which lags
+      # github.com (v6.0.0 as of 2026-11). A major bump past it fails at "Set up job" on
+      # GHES. Bump by hand after checking the GHES copy has the version.
+      - dependency-name: "actions/checkout"
+        update-types: ["version-update:semver-major"]

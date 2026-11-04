@@ -252,9 +252,12 @@ runs:
     #
     # ref: under pull_request_target checkout defaults to the default branch; the labeled
     # head SHA is the PR. Empty keeps the pull_request default.
+    #
+    # v4.3.1, not newer: GHES serves actions/* from its own copy of the actions org, which
+    # stops at v6.0.0, so a v7 pin fails at "Set up job" before any step runs.
     - name: Check out repository code
       if: steps.guard.outputs.run == 'true'
-      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       with:
         ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.head.sha || '' }}
         fetch-depth: 0
