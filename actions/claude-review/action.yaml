@@ -714,8 +714,8 @@ runs:
     # comment, found by the ID the review step returns. The commit is what Claude read
     # (HEAD after the review step's checkout), so a reader can tell which push it covers.
     # Not by run URL: a caller's matrix shares one run, and both passes' costs would land
-    # on whichever comment came first. The same edit drops the
-    # progress header and checklist, which are tracking-mode scaffolding, not the review.
+    # on whichever comment came first. The same edit drops the progress header and
+    # checklist, which are tracking-mode scaffolding, not the review.
     - name: Report reviewed commit and Bedrock cost
       if: always() && steps.claude.outputs.execution_file != ''
       shell: bash
