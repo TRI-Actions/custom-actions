@@ -183,7 +183,7 @@ Why this is safe to run on fork code:
 - The label comes off when the run ends, pass or fail. A run that finds it already gone (a queued duplicate, or a re-run of a finished job) skips, so one label is one review. The review comment names the commit it reviewed.
 - Don't add steps that build, test or install anything from the PR to this job. With `pull_request_target`, those would run fork code with the base repo's token.
 
-For private and internal repos, GitHub documents the "Run workflows from fork pull requests" setting for `pull_request` only. Whether it also gates `pull_request_target` isn't documented; check on your instance before relying on it being off.
+The "Run workflows from fork pull requests" setting for private and internal repos does **not** stop this workflow. Tested on GHES 3.20: with the setting off, a label on a fork PR still started a `pull_request_target` run. Turning the setting off doesn't block fork reviews; the label and the checks above are what gate them.
 
 ## Security pass on security-relevant paths
 
