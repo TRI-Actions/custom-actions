@@ -819,13 +819,29 @@ runs:
             // GitHub refuses the merge when the PR head is no longer the applied commit.
             const sha = '${{ steps.sha.outputs.sha }}';
             const marker = 'deploy-incomplete-${{ steps.get-label.outputs.environment }}';
+            // A merge commit first, as before. A repository that does not allow one (its settings,
+            // or a ruleset requiring linear history) answers 405 "... are not allowed ...", so the
+            // next method is tried; any other refusal (head moved, checks, conflicts) stops here.
+            const merge = async () => {
+              for (const method of ['merge', 'squash', 'rebase']) {
+                try {
+                  await github.rest.pulls.merge({
+                    owner: context.repo.owner,
+                    repo: context.repo.repo,
+                    pull_number: context.issue.number,
+                    sha,
+                    merge_method: method,
+                  });
+                  core.info(`Merged with method ${method}`);
+                  return;
+                } catch (error) {
+                  if (method === 'rebase' || error.status !== 405 || !/not allowed/i.test(error.message)) throw error;
+                  core.info(`Merge method ${method} refused: ${error.message}`);
+                }
+              }
+            };
             try {
-              await github.rest.pulls.merge({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: context.issue.number,
-                sha,
-              });
+              await merge();
             } catch (error) {
               await github.rest.issues.createComment({
                 issue_number: context.issue.number,

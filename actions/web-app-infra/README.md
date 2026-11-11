@@ -77,6 +77,7 @@ The **apply** step acquires the lock normally via `terraform apply`. If it encou
 ## Incomplete deploys
 
 A `GithubDeploy` adds the label `deploy-incomplete-<env>` (for example `deploy-incomplete-staging`) to its PR right before `terraform apply`, and removes it after the PR is merged.
+The merge uses a merge commit, or a squash or a rebase when the repository does not allow merge commits (for example a ruleset requiring linear history).
 If the apply, the after_scripts or the merge fails, or the run is cancelled, the label stays: AWS then has changes that the base branch doesn't, and a deploy from any other PR would undo them.
 While any other PR, open or closed, has the label for the same environment, `GithubDeploy` is refused with a comment that links it.
 The labeled PR can still deploy, so fix it and comment `GithubDeploy` again, or push a revert to it and deploy that.
