@@ -10,6 +10,9 @@ inputs:
   drift_check:
     description: 'whether to run drift check or not'
     default: 'false'
+  preview_refresh:
+    description: "'true' to refresh in memory during the plan (pulumi preview --refresh), so the plan compares against what is deployed now without writing state or taking the stack lock. Only used by plan."
+    default: 'false'
   update_state:
     description: whether we update the state or not
     default: 'false'
@@ -68,6 +71,7 @@ runs:
       env:
         WORKDIRS: ${{ inputs.workdirs }}
         DRIFT_CHECK: ${{ inputs.drift_check }}
+        PREVIEW_REFRESH: ${{ inputs.preview_refresh }}
         STACK_NAME: ${{ inputs.stack }}
         BACKEND_URL: ${{ inputs.backend }}
         OUTPUTS_FILE: ${{ runner.temp }}/pulumi-cli-outputs.txt

@@ -239,6 +239,7 @@ new_sandbox() {
   WORKDIRS="."
   UPDATE_STATE="false"
   DRIFT_CHECK="false"
+  PREVIEW_REFRESH="false"
   FAIL_FAST="false"
   # Empty, as when the action input is left at its default for the backend.
   STACK_NAME=""
@@ -269,6 +270,7 @@ run() {
     WORKDIRS="$WORKDIRS" \
     UPDATE_STATE="$UPDATE_STATE" \
     DRIFT_CHECK="$DRIFT_CHECK" \
+    PREVIEW_REFRESH="$PREVIEW_REFRESH" \
     FAIL_FAST="$FAIL_FAST" \
     STACK_NAME="$STACK_NAME" \
     BACKEND_URL="$BACKEND_URL" \
@@ -494,6 +496,22 @@ test_plan_word_error_in_output_is_not_a_failure() {
   run plan.sh
   assert_status 0
   assert_file_lacks "plan.out" "Plan failed!"
+}
+
+test_plan_preview_refresh_refreshes_in_memory() {
+  PREVIEW_REFRESH="true"
+  run plan.sh
+  assert_status 0
+  assert_ran "preview --color=never --diff --non-interactive --refresh"
+  assert_never_ran "refresh --yes"
+}
+
+test_plan_previews_without_refresh_by_default() {
+  run plan.sh
+  assert_status 0
+  assert_ran "preview --color=never --diff --non-interactive"
+  assert_never_ran "--refresh"
+  assert_never_ran "refresh --yes"
 }
 
 test_plan_drift_detected_sets_output() {
@@ -1192,6 +1210,8 @@ TESTS=(
   plan_missing_preamble_marker_does_not_break_sed
   plan_trims_preamble_above_marker
   plan_word_error_in_output_is_not_a_failure
+  plan_preview_refresh_refreshes_in_memory
+  plan_previews_without_refresh_by_default
   plan_drift_detected_sets_output
   plan_drift_check_refresh_failure_propagates
   plan_drift_status_aggregates_to_drifted
