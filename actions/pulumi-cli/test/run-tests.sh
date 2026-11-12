@@ -239,6 +239,7 @@ new_sandbox() {
   WORKDIRS="."
   UPDATE_STATE="false"
   DRIFT_CHECK="false"
+  FAIL_FAST="false"
   # Empty, as when the action input is left at its default for the backend.
   STACK_NAME=""
   BACKEND_URL=""
@@ -268,6 +269,7 @@ run() {
     WORKDIRS="$WORKDIRS" \
     UPDATE_STATE="$UPDATE_STATE" \
     DRIFT_CHECK="$DRIFT_CHECK" \
+    FAIL_FAST="$FAIL_FAST" \
     STACK_NAME="$STACK_NAME" \
     BACKEND_URL="$BACKEND_URL" \
     STUB_LOG="$STUB_LOG" \
@@ -382,6 +384,44 @@ test_deploy_aggregates_across_workdirs() {
   assert_file_contains "$GH_SUMMARY" '| `stg` | up | **FAILED**'
   assert_file_contains "$GH_SUMMARY" '| `dev` | up | ok |'
   assert_file_contains "$GH_SUMMARY" '| `prd` | up | ok |'
+}
+
+test_deploy_fail_fast_stops_at_the_first_failure() {
+  workdirs dev stg prd
+  FAIL_FAST="true"
+  STUB_FAIL_CMDS="up"
+  STUB_FAIL_IN_DIR="stg"
+  run deploy.sh
+  assert_status 1
+  assert_ran "dev"
+  assert_ran "stg"
+  assert_never_ran "prd"
+  assert_file_contains "$GH_SUMMARY" '| `dev` | up | ok |'
+  assert_file_contains "$GH_SUMMARY" '| `stg` | up | **FAILED**'
+  assert_file_contains "$GH_SUMMARY" '| `prd` | up | not run (an earlier workdir failed) |'
+  assert_file_has_line "$OUTPUTS_FILE" "failed-workdirs=stg"
+  if [[ -e "$SANDBOX/prd/deploy.out" ]]; then
+    fail_assert "prd/deploy.out should not exist: prd was never started"
+  fi
+}
+
+test_deploy_fail_fast_runs_everything_when_nothing_fails() {
+  workdirs dev stg prd
+  FAIL_FAST="true"
+  run deploy.sh
+  assert_status 0
+  assert_ran "prd"
+  assert_file_contains "$GH_SUMMARY" '| `prd` | up | ok |'
+}
+
+test_plan_ignores_fail_fast() {
+  workdirs dev stg prd
+  FAIL_FAST="true"
+  STUB_FAIL_CMDS="preview"
+  STUB_FAIL_IN_DIR="stg"
+  run plan.sh
+  assert_status 1
+  assert_ran "prd"
 }
 
 test_deploy_handles_nested_workdirs() {
@@ -1139,6 +1179,9 @@ TESTS=(
   deploy_keeps_refresh_and_up_output
   deploy_refresh_failure_skips_up
   deploy_aggregates_across_workdirs
+  deploy_fail_fast_stops_at_the_first_failure
+  deploy_fail_fast_runs_everything_when_nothing_fails
+  plan_ignores_fail_fast
   deploy_handles_nested_workdirs
   deploy_login_failure_aborts_early
   deploy_skips_missing_workdir_but_runs_the_rest

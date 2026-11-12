@@ -1,6 +1,6 @@
 # Claude Mention
 
-Answers `@claude <question>` on issues and PR comments using Claude Code on Bedrock. It's answer-only, with no write access to the repo and no Bash. Only commenters whose association is **OWNER, MEMBER or COLLABORATOR**, or who have **write, maintain or admin** on the repo, can trigger it. The permission check covers private org members, whom GitHub reports to the job token as `CONTRIBUTOR`. Everyone else is skipped quietly. On a pull request, only same-repo PRs are answered; a fork PR fails closed.
+Answers `@claude <question>` on issues and PR comments using Claude Code on Bedrock. It's answer-only, with no write access to the repo and no Bash. Only commenters with **write, maintain or admin** on the repo can trigger it, whatever their author association: an org member or collaborator with read access is skipped. The check is the repo's permission API, so it also covers private org members, whom GitHub reports to the job token as `CONTRIBUTOR`. Everyone else is skipped quietly. On a pull request, only same-repo PRs are answered; a fork PR fails closed.
 
 **Pin by commit SHA.** It has the same hardening and fixed settings as [claude-review](../claude-review/README.md).
 
@@ -29,7 +29,7 @@ concurrency:
 jobs:
   answer:
     # Cheap pre-filter so most comments never take a runner. The action re-checks
-    # this and the author association itself.
+    # this and the commenter's repo permission itself.
     if: contains(github.event.comment.body || github.event.issue.body, '@claude')
     runs-on: ubuntu-latest
     timeout-minutes: 15

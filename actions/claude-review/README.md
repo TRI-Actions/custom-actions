@@ -24,6 +24,8 @@ Hardened, review-only Claude Code PR review on Bedrock. Works on github.com and 
 | `max-turns` | Turn cap | `30` |
 | `runner-bedrock-role-arn` | runner only. A Bedrock-only role assumed for the run (15-minute session, session policy limited to `bedrock:InvokeModel*`). **Required for `runner`** unless `allow-runner-credentials` is set | `""` |
 | `allow-runner-credentials` | runner only. `"true"` runs without `runner-bedrock-role-arn`, exporting the runner role's own credentials to the model's process. A temporary, visible opt-in | `"false"` |
+| `allow-fork-prs` | `"true"` lets the action run on `pull_request_target`, which is how it reviews PRs from forks. See [Fork PRs](#fork-prs-pull_request_target) | `"false"` |
+| `trigger-label` | `pull_request_target` only. The one label that starts a fork review; any other label fails the run | `claude-review` |
 | `github-token` | Must be the job's own `GITHUB_TOKEN`. Personal access tokens (`ghp_`, `github_pat_`) are rejected | `github.token` |
 
 ## Repo-specific guidance
@@ -36,7 +38,7 @@ Put review guidance for your repo in **`.github/claude-review.md`** on your **de
 - It's instructions to the model only. It can't change tools, flags, or what the verdict means.
 - Both review types share one rating scale: rate by the harm if the concern is real, not by confidence. A rule here can raise a rating; when two rules rate one finding differently, the higher rating wins. So a "weakened check is HIGH" rule beats a "leave a LOW question" rule.
 
-This protects the prompt, not the pipeline: your workflow file still runs from the PR head. Anything that gates on the verdict must still refuse PRs touching `.github/`, `CLAUDE.md`, `.claude/` or `.mcp.json`, and check the head SHA.
+This protects the prompt, not the pipeline: under `pull_request` your workflow file still runs from the PR head. Anything that gates on the verdict must still refuse PRs touching `.github/`, `CLAUDE.md`, `.claude/` or `.mcp.json`, and check the head SHA.
 
 ## Outputs
 
@@ -61,7 +63,7 @@ These are fixed inside the action:
 - The caller's identity is checked against the expected role before the review starts.
 - Bun is installed before any credential is in the environment: the platform tarball is fetched from the public npm registry and checked against a pinned SHA-512. No npm install scripts run.
 - The AWS credentials the action exports are blanked when it finishes, so later steps in your job don't inherit them. Keep the job single-purpose anyway.
-- Only same-repo PRs; anything else fails closed. Drafts are skipped.
+- Only same-repo PRs on `pull_request`, or, with `allow-fork-prs`, a `pull_request_target` `labeled` event for `trigger-label` from someone with write access, with the PR still at the labeled commit. Anything else fails closed. Drafts are skipped.
 - No commit status (forgeable) and no approval.
 
 Every `uses:` inside the action is on the GHES allowlist (`actions/*`, `aws-actions/*`, `TRI-Actions/*`).
@@ -135,6 +137,53 @@ jobs:
           path: ${{ steps.claude.outputs.verdict-file }}
           retention-days: 7
 ```
+
+## Fork PRs (`pull_request_target`)
+
+For repos where PRs come from forks. A review runs only when someone with write access adds a label, and the label is removed when the run ends, so each review is someone's deliberate choice.
+
+```yaml
+name: Claude Review
+on:
+  pull_request_target:
+    types: [labeled]   # no other types: every push from any fork would be reviewed
+
+jobs:
+  review:
+    if: github.event.label.name == 'claude-review' && github.event.pull_request.draft == false
+    runs-on: codebuild-claude-runner-<repo>-${{ github.run_id }}-${{ github.run_attempt }}
+    timeout-minutes: 25
+    permissions:
+      contents: read
+      pull-requests: write   # comments and the label; issues: write isn't needed
+    # Queue, don't cancel: a queued duplicate finds the label gone and skips.
+    concurrency:
+      group: claude-review-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
+    steps:
+      - id: claude
+        uses: TRI-Actions/custom-actions/actions/claude-review@<sha> # claude-review/<version>
+        with:
+          allow-fork-prs: "true"
+          aws-auth: runner
+          runner-bedrock-role-arn: arn:aws:iam::<ACCOUNT>:role/<BedrockOnlyRole>
+      - if: always() && steps.claude.outputs.verdict-file != ''
+        uses: actions/upload-artifact@ff15f0306b3f739f7b6fd43fb5d26cd321bd4de5 # v3.2.1
+        with:
+          name: claude-verdict
+          path: ${{ steps.claude.outputs.verdict-file }}
+          retention-days: 7
+```
+
+Why this is safe to run on fork code:
+
+- `pull_request_target` runs the workflow from the **default branch**, so a fork can't change the steps. (Under `pull_request` a fork's run would use its own workflow file.) Edits to this file take effect only once merged.
+- The PR is read, never executed: no Bash, no repo settings, hooks or MCP servers, and `CLAUDE.md`/`.claude/` restored from the default branch. These are the same controls as for same-repo PRs.
+- The action checks that the label is `trigger-label`, that the labeler has write, maintain or admin access at run time (anyone with triage can add a label), and that the PR head is still the labeled commit. If it isn't, the action comments on the PR asking for the label again. If a push lands while the review runs, the verdict is `blocked` ("reviewed X, not the labeled commit Y").
+- The label comes off when the run ends, pass or fail. A run that finds it already gone (a queued duplicate, or a re-run of a finished job) skips, so one label is one review. The review comment names the commit it reviewed.
+- Don't add steps that build, test or install anything from the PR to this job. With `pull_request_target`, those would run fork code with the base repo's token.
+
+The "Run workflows from fork pull requests" setting for private and internal repos does **not** stop this workflow. Tested on GHES 3.20: with the setting off, a label on a fork PR still started a `pull_request_target` run. Turning the setting off doesn't block fork reviews; the label and the checks above are what gate them.
 
 ## Security pass on security-relevant paths
 

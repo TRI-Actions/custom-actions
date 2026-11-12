@@ -7,6 +7,7 @@
 #   UPDATE_STATE  'true' to run 'pulumi refresh' before 'pulumi up'
 #   STACK_NAME    stack to select or create in each workdir (default 'main')
 #   BACKEND_URL   state backend to log in to (default: derived from the repository)
+#   FAIL_FAST     'true' to stop at the first failed workdir; the rest are not run
 
 # pipefail: pulumi is piped into tee, which would otherwise mask its exit status.
 # '-e' is omitted so the workdir loop survives one failing workdir.
@@ -53,6 +54,7 @@ deploy_one() {
 
 main() {
   pulumi_login
+  STOP_ON_FAILURE="${FAIL_FAST:-false}"
   for_each_workdir up deploy_one
   emit_summary up
   finish

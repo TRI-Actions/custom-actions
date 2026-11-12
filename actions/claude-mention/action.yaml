@@ -116,20 +116,17 @@ runs:
         case "$BODY" in *@claude*) ;; *) skip "no @claude mention" ;; esac
         export GH_HOST="${GITHUB_SERVER_URL#https://}"
         [ "$GH_HOST" = "github.com" ] || export GH_ENTERPRISE_TOKEN="$GH_TOKEN"
-        # author_association is computed for what the viewer can see, and the job token
-        # cannot see private org membership, so a private member arrives as CONTRIBUTOR.
-        # For anything other than OWNER/MEMBER/COLLABORATOR, ask the repo instead: the
-        # author qualifies only with write, maintain or admin here. An API error skips.
-        case "$ASSOC" in
-          OWNER|MEMBER|COLLABORATOR) ;;
-          *)
-            [[ "$AUTHOR" =~ ^[A-Za-z0-9-]{1,39}$ ]] || skip "author association '$ASSOC' may not trigger Claude"
-            perm=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${AUTHOR}/permission" --jq .permission 2>/dev/null) || perm=""
-            case "$perm" in
-              admin|maintain|write) echo "author association '$ASSOC', but $AUTHOR has $perm on this repo" ;;
-              *) skip "author association '$ASSOC' (repo permission '${perm:-unknown}') may not trigger Claude" ;;
-            esac
-            ;;
+        # The author qualifies only with write, maintain or admin on this repo, whatever
+        # their author_association. MEMBER and COLLABORATOR do not imply write: an org
+        # whose base permission is read makes every member a read-only MEMBER, and a
+        # collaborator can be added with read. author_association is also computed for
+        # what the viewer can see, so a private org member arrives as CONTRIBUTOR; the
+        # permission lookup covers them too. An API error skips.
+        [[ "$AUTHOR" =~ ^[A-Za-z0-9-]{1,39}$ ]] || skip "author login is not a valid GitHub login"
+        perm=$(gh api "repos/${GITHUB_REPOSITORY}/collaborators/${AUTHOR}/permission" --jq .permission 2>/dev/null) || perm=""
+        case "$perm" in
+          admin|maintain|write) echo "$AUTHOR (author association '$ASSOC') has $perm on this repo" ;;
+          *) skip "$AUTHOR (author association '$ASSOC', repo permission '${perm:-unknown}') may not trigger Claude" ;;
         esac
         # Same-repo PRs only, as in claude-review. On a PR the action checks out the PR's
         # code, so a member commenting on a fork PR would put fork-controlled files in
@@ -187,7 +184,7 @@ runs:
     # credential helper that keeps the token out of the working tree.
     - name: Check out repository code
       if: steps.guard.outputs.run == 'true'
-      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
         fetch-depth: 1
         persist-credentials: false

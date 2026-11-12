@@ -253,10 +253,14 @@ select_or_init_stack() {
 # workdir does not stop the others; the run fails at the end via finish().
 for_each_workdir() {
   local operation="$1" fn="$2"
-  local d status attempted=0 reasons_before
+  local d status attempted=0 reasons_before stopped=0
 
   # Unquoted: WORKDIRS is a space-separated list.
   for d in ${WORKDIRS:-}; do
+    if (( stopped )); then
+      RESULT_ROWS+=("| \`${d}\` | ${operation} | not run (an earlier workdir failed) |")
+      continue
+    fi
     if [[ ! -d "$d" ]]; then
       log "$d is not a directory, skipping.."
       RESULT_ROWS+=("| \`${d}\` | ${operation} | skipped (not a directory) |")
@@ -289,6 +293,8 @@ for_each_workdir() {
       if (( $(reasons_count) == reasons_before )); then
         record_failure "$d" "${operation} failed (exit ${status})"
       fi
+      # Set by deploy.sh from the fail_fast input.
+      [[ "${STOP_ON_FAILURE:-false}" != "true" ]] || stopped=1
     fi
   done
   CURRENT_WORKDIR=""
