@@ -115,6 +115,7 @@ These come from InfoSec's reviews of claude-review and claude-mention (the "Secu
 | GHES runner isolation | Isolated Claude runners in 550939891544 only, with no build or test steps in the job |
 | Author gate, with write access required for every commenter | The repo permission is checked for every commenter, as in claude-mention since custom-actions#55. Triage and read are skipped |
 | Bind work to a specific commit | The PR head SHA is resolved in Guard, that commit is checked out, and the reply names it and notes a later push |
+| The caller workflow can come from the PR head | `issue_comment` runs the default branch's `codex.yml`, but an inline `pull_request_review_comment` runs the PR branch's copy, which can use the `…:pull_request` OIDC subject. The control is CODEOWNERS on `.github/**`, as in codex-example |
 | Fork PRs | Same-repo PRs only, failing closed. There's no label path, because answering a fork PR would put fork code in front of a model with Bedrock credentials |
 | Reject personal access tokens | `ghp_`, `github_pat_`, `gho_` and `ghu_` are refused |
 | Pin everything | `actions/checkout` is pinned by SHA. Codex comes from the GitHub release, pinned by version and SHA-256. There's no fork and no third-party action |
