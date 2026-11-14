@@ -321,6 +321,7 @@ Every failure, including invalid inputs, fails the step.
 
 Merges a pull request only if its head is still at the expected commit.
 GitHub answers 409 when the head moved, and the `error` output says so.
+When another merge into the same base branch is landing, GitHub answers 405 `Base branch was modified`; that one is tried again after 2, 4, 8 and 16 seconds, with the same SHA pin, so pipelines that merge at the same moment do not fail each other.
 A 200 response counts as a merge only if it has `merged: true` and a 40-character merge commit SHA; otherwise the step fails with `GitHub did not confirm the merge of PR #<n>: <message>`.
 Every failure sets `merged=false` and `error`, and fails the step.
 
