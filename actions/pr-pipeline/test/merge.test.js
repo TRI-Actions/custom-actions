@@ -217,4 +217,3 @@ test('isBaseModified needs both the 405 and the message', () => {
   assert.equal(isBaseModified(httpError(409, 'Base branch was modified.')), false);
   assert.equal(isBaseModified(undefined), false);
 });
-
