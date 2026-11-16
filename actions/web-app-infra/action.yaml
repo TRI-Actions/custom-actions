@@ -223,7 +223,7 @@ runs:
           }
 
     - name: Setup Terraform
-      uses: TRI-Actions/setup-terraform@v0.0.1
+      uses: TRI-Actions/custom-actions/actions/setup-terraform@main
       with:
         terraform_wrapper: true
         terraform_version: 1.14.9
