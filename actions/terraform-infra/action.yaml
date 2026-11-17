@@ -186,7 +186,7 @@ runs:
           core.setOutput('CHECK_ID', check.data.id)
 
     - name: Setup Terraform
-      uses: TRI-Actions/custom-actions/actions/setup-terraform@fix-terraform-exe-permissions
+      uses: TRI-Actions/custom-actions/actions/setup-terraform@main
       with:
         terraform_wrapper: true
         terraform_version: 1.14.9
