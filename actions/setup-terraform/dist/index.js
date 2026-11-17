@@ -89,6 +89,7 @@ async function installWrapper (pathToCLI) {
     target = [pathToCLI, 'terraform'].join(path.sep);
     core.debug(`Copying ${source} to ${target}.`);
     await io.cp(__nccwpck_require__.ab + "index1.js", target);
+    await fs.chmod(target, 0o755);
   } catch (e) {
     core.error(`Unable to copy ${source} to ${target}.`);
     throw e;
