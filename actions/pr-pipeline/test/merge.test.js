@@ -3,7 +3,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { parseInputs, mergeError, confirmationError, run } = require('../lib/merge.js');
+const { parseInputs, mergeError, confirmationError, isBaseModified, RETRY_DELAYS_MS, run } = require('../lib/merge.js');
 
 const CONTEXT = { repo: { owner: 'tri', repo: 'infra' }, serverUrl: 'https://ghe.example', runId: 42 };
 const SHA = 'abcdef1234567890abcdef1234567890abcdef12';
@@ -159,4 +159,61 @@ test('invalid inputs fail without calling the API', async () => {
   assert.equal(core.outputs.merged, 'false');
   assert.match(core.outputs.error, /^merge-pr: sha must be a full 40-character commit SHA/);
   assert.equal(core.failed, core.outputs.error);
+});
+
+// results: one entry per merge call, each an Error to throw or a response (null = success).
+async function runWithSequence(results) {
+  const calls = [];
+  const slept = [];
+  const github = {
+    rest: {
+      pulls: {
+        merge: async (params) => {
+          calls.push(params);
+          const result = results[Math.min(calls.length - 1, results.length - 1)];
+          if (result instanceof Error) throw result;
+          return result || { data: { sha: MERGE_SHA, merged: true, message: 'Pull Request successfully merged' } };
+        },
+      },
+    },
+  };
+  const core = fakeCore();
+  const env = { PRP_PR_NUMBER: '12', PRP_SHA: SHA, PRP_METHOD: 'merge' };
+  await run({ github, context: CONTEXT, core, env, sleep: async (ms) => { slept.push(ms); } });
+  return { calls, core, slept };
+}
+
+const BASE_MODIFIED = () => httpError(405, 'Base branch was modified. Review and try the merge again.');
+
+test('a merge refused because another merge landed is tried again, and succeeds', async () => {
+  const { calls, core, slept } = await runWithSequence([BASE_MODIFIED(), BASE_MODIFIED(), null]);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(slept, RETRY_DELAYS_MS.slice(0, 2));
+  assert.equal(core.failed, null);
+  assert.deepEqual(core.outputs, { merged: 'true', 'merge-sha': MERGE_SHA, error: '' });
+  assert.ok(calls.every((c) => c.sha === SHA), 'every attempt keeps the sha pin');
+});
+
+test('the base-modified retries stop after the last delay, reporting the refusal', async () => {
+  const { calls, core, slept } = await runWithSequence([BASE_MODIFIED()]);
+  assert.equal(calls.length, RETRY_DELAYS_MS.length + 1);
+  assert.deepEqual(slept, RETRY_DELAYS_MS);
+  assert.equal(core.outputs.merged, 'false');
+  assert.equal(core.failed, 'GitHub refused to merge PR #12 (405): Base branch was modified. Review and try the merge again.');
+});
+
+test('other refusals are not retried', async () => {
+  for (const err of [httpError(405, 'Pull Request is not mergeable'), httpError(409, 'Head branch was modified. Review and try the merge again.'), httpError(403, 'Resource not accessible')]) {
+    const { calls, slept, core } = await runWithSequence([err]);
+    assert.equal(calls.length, 1, err.message);
+    assert.deepEqual(slept, [], err.message);
+    assert.equal(core.outputs.merged, 'false', err.message);
+  }
+});
+
+test('isBaseModified needs both the 405 and the message', () => {
+  assert.equal(isBaseModified(BASE_MODIFIED()), true);
+  assert.equal(isBaseModified(httpError(405, 'Merge commits are not allowed')), false);
+  assert.equal(isBaseModified(httpError(409, 'Base branch was modified.')), false);
+  assert.equal(isBaseModified(undefined), false);
 });

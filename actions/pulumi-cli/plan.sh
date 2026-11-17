@@ -6,6 +6,8 @@
 # Env:
 #   WORKDIRS     space-separated relative paths (default '.')
 #   DRIFT_CHECK  'true' to refresh first and report drift
+#   PREVIEW_REFRESH 'true' to refresh in memory during the preview instead: the plan
+#                is against what is deployed, but no state is written and no lock taken
 #   STACK_NAME   stack to select or create in each workdir (default 'main')
 #   BACKEND_URL  state backend to log in to (default: derived from the repository)
 
@@ -73,7 +75,14 @@ plan_one() {
     fi
   fi
 
-  if ! pulumi preview --color=never --diff --non-interactive 2>&1 | tee "$OUT_FILE"; then
+  local preview_args=(--color=never --diff --non-interactive)
+  # In memory: unlike 'pulumi refresh', it writes no state and takes no lock, so plans
+  # of the same stack, or a plan during a deploy, cannot collide.
+  if [[ "${PREVIEW_REFRESH:-}" == "true" ]]; then
+    preview_args+=(--refresh)
+  fi
+
+  if ! pulumi preview "${preview_args[@]}" 2>&1 | tee "$OUT_FILE"; then
     err "pulumi preview failed for ${dir}; see ${dir}/${OUT_FILE}"
     record_failures "$dir" "pulumi preview failed" "$OUT_FILE"
     mark_plan_failed
