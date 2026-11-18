@@ -476,6 +476,25 @@ test('empty teams with allow-approval false is denied', async () => {
   assert.equal(github.calls.teams.length + github.calls.reviews.length, 0);
 });
 
+test('without teams the denial reason names only the missing approval', async () => {
+  const { core } = await authorize(baseEnv({ PRP_TEAMS: '' }), { permissions: { carol: WRITE } });
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'false');
+  assert.equal(
+    core.outputs.reason,
+    'Not authorized: the head commit `aaaaaaa` has no approval from a reviewer with write access who is not the PR author and did not author or commit changes in the PR (an approval of an earlier commit does not count).',
+  );
+});
+
+test('without teams a commenter without write access is told so', async () => {
+  const { core } = await authorize(baseEnv({ PRP_TEAMS: '' }), { permissions: { carol: READ } });
+  assert.equal(core.outputs.authorized, 'false');
+  assert.equal(
+    core.outputs.reason,
+    'Not authorized: `carol` does not have write access to the repository, which approval-based authorization requires.',
+  );
+});
+
 test('denial reason lists every team checked', async () => {
   const { core } = await authorize(baseEnv({ PRP_TEAMS: 'ie,platform' }), {});
   assert.match(core.outputs.reason, /not an active member of any of the teams `TRI-IE\/ie`, `TRI-IE\/platform`/);
