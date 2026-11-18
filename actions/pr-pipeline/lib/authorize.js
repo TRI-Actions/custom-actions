@@ -135,6 +135,8 @@ function denialReason({ actor, org, teams, approverTeams = [], allowApproval, sh
       `the head commit \`${sha.slice(0, 7)}\` has no approval from ${reviewer} ` +
       '(an approval of an earlier commit does not count)';
   }
+  // Without teams, approval is the only way in, so the reason is the approval alone.
+  if (!teams.length && allowApproval) return `Not authorized: ${approvalPart}.`;
   return `Not authorized: ${teamPart}, and ${approvalPart}.`;
 }
 
