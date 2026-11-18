@@ -6,7 +6,7 @@ branding:
 
 inputs:
   Target_Account:
-    description: "Target AWS account id (required for GitHub.com runners using federated OIDC login)"
+    description: "Target AWS account id (GitHub.com runners): the job assumes Target_Role_Name there directly with its GitHub OIDC token, so the role must trust the repository and the job needs id-token: write"
     required: false
   Target_Role_Name:
     description: "Cross account role to assume on target account (used with Target_Account)"
@@ -16,16 +16,16 @@ inputs:
     description: "Full IAM role ARN for cross-account access (optional, for CodeBuild runners needing cross-account)"
     required: false
   SSM_private_keys:
-    description: "comma separated list of ssm key locations, no spaces"
+    description: "comma separated list of ssm key locations, no spaces (CodeBuild runners only: read from the runner's own account; refused with Target_Account)"
     required: false
   SSM_pat:
-    description: "Location of pat token in SSM"
+    description: "Location of pat token in SSM (CodeBuild runners only; refused with Target_Account)"
     required: false
   JFrog_user:
-    description: "Location of JFrog Username in SSM"
+    description: "Location of JFrog Username in SSM (CodeBuild runners only; refused with Target_Account, use JFrog_oidc_provider)"
     required: false
   JFrog_Token:
-    description: "Location of JFrog Token in SSM"
+    description: "Location of JFrog Token in SSM (CodeBuild runners only; refused with Target_Account, use JFrog_oidc_provider)"
     required: false
   JFrog_oidc_provider:
     description: "JFrog OIDC provider of the repository's GitHub org (e.g. tri-rse for TRI-RSE). When set, terraform init downloads JFrog registry modules with a short-lived token from the job's GitHub OIDC token; the calling job needs id-token: write"
@@ -70,19 +70,18 @@ runs:
     #                                            #
     ##############################################
 
-    # Path 1: GitHub.com runners - federated OIDC login via target account ID.
-    # Only the first hop (the federated role in the shared services account)
-    # happens here. The SSM parameters read in the Git & Artifact Auth section
-    # below live in the shared services account, so they must be read before
-    # the credentials are swapped for the target account role.
-    # Skipped when no SSM parameter is requested: the target account role is
-    # assumed on its own further down, so there is nothing to use the hop for.
-    - name: Sign into federated role in shared services account (OIDC)
+    # Path 1: GitHub.com runners assume the target account role directly with the
+    # job's GitHub OIDC token, further down. They read no SSM parameters: the ones
+    # they used to read live in the shared services account, reached through its
+    # federated roles, which are retired. JFrog registry modules come through
+    # JFrog_oidc_provider instead, so the SSM inputs are refused here rather than
+    # failing later with a less clear error.
+    - name: Refuse SSM inputs with Target_Account
       if: ${{ inputs.Target_Account != '' && (inputs.SSM_private_keys != '' || inputs.SSM_pat != '' || inputs.JFrog_user != '' || inputs.JFrog_Token != '') }}
-      uses: aws-actions/configure-aws-credentials@v6.2.0
-      with:
-        role-to-assume: arn:aws:iam::371027173325:role/GHAFederatedRole-${{ inputs.Target_Account }}
-        aws-region: us-east-1
+      shell: bash
+      run: |
+        echo "::error::web-app-infra: SSM_private_keys, SSM_pat, JFrog_user and JFrog_Token cannot be used with Target_Account. They read secrets in the shared services account through its federated roles, which are retired. Use JFrog_oidc_provider for JFrog registry modules and remove the SSM inputs."
+        exit 1
 
     # Path 2 (CodeBuild runners, STS assume-role for cross-account access) runs
     # after the Git & Artifact Auth section below. The SSM parameters read there
@@ -136,13 +135,15 @@ runs:
         JFROG_USER: ${{ inputs.JFrog_user }}
         JFROG_TOKEN: ${{ inputs.JFrog_Token }}
 
-    # Path 1: second hop, into the target account role
-    - name: Sign into IAM Role (federated)
+    # Path 1: the target account role, directly with GitHub OIDC and no fallback
+    # to the shared services federated role chain.
+    - name: Sign into IAM Role (OIDC)
       if: ${{ inputs.Target_Account != '' }}
       uses: TRI-Actions/custom-actions/actions/get-aws-credentials@main
       with:
         account-id: ${{ inputs.Target_Account }}
         target-role-name: ${{ inputs.Target_Role_Name }}
+        direct: only
 
     # Path 2: CodeBuild runners — optional STS assume-role for cross-account access
     - name: Sign into IAM Role (STS)

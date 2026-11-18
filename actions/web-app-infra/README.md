@@ -56,6 +56,8 @@ AWS_IAM_Role:
 ```
 
 If no IAM role is set, it will use whatever is set by default by the runner executing the deployment.
+On GitHub.com runners, set `Target_Account` (and `Target_Role_Name`, default `DefaultCrossAccountRole`) instead: the job assumes that role directly with its GitHub OIDC token, so the role must trust the repository and the job needs `permissions: id-token: write`.
+The SSM inputs (`SSM_private_keys`, `SSM_pat`, `JFrog_user`, `JFrog_Token`) are for CodeBuild runners, which read them from their own account; with `Target_Account` they are refused, so use `JFrog_oidc_provider` for registry modules.
 SSM_private keys can have multiple key locations separated by a comma. Private keys are keys used to facilitate github repo retrieval.
 SSM_pat can only use one personal access token location. PAT is used to facilitate github repo retrieval.
 JFrog_oidc_provider lets `terraform init` download modules from the JFrog Terraform registry (`toyotaresearchinstitute.jfrog.io/ie-tf-modules-aws__modules/<name>/aws`) without an SSH key.
