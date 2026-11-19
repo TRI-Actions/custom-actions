@@ -38,11 +38,18 @@ function fakeGithub({
   commits = [commit(HEAD, 'dave')],
   reviewsError,
   commitsError,
+  decision = 'APPROVED',
 } = {}) {
-  const calls = { teams: [], reviews: [], commits: [], permissions: [] };
+  const calls = { teams: [], reviews: [], commits: [], permissions: [], graphql: [] };
   const github = {
     calls,
     paginate: async (method, params) => (await method(params)).data,
+    // decision: the PR's reviewDecision (a string or null), or an HTTP status to fail with
+    graphql: async (query, variables) => {
+      calls.graphql.push(variables);
+      if (typeof decision === 'number') throw httpError(decision);
+      return { repository: { pullRequest: { reviewDecision: decision } } };
+    },
     rest: {
       teams: {
         getMembershipForUserInOrg: async (params) => {
@@ -510,6 +517,7 @@ test('misconfiguration fails the step', async () => {
   const cases = [
     [{ PRP_ACTOR: '' }, /actor is required/],
     [{ PRP_ALLOW_APPROVAL: 'yes' }, /allow-approval must be 'true' or 'false'/],
+    [{ PRP_REQUIRE_REVIEW_DECISION: 'yes' }, /require-review-decision must be 'true' or 'false'/],
     [{ PRP_SHA: '' }, /sha must be the full 40-character head commit SHA/],
     [{ PRP_SHA: 'abc1234' }, /sha must be the full 40-character head commit SHA/],
     [{ PRP_PR_AUTHOR: '' }, /pr-author is required/],
@@ -661,4 +669,84 @@ test('approver-teams reaches the script through env and defaults to empty', () =
   assert.match(text, /^\s+PRP_APPROVER_TEAMS: \$\{\{ inputs\.approver-teams \}\}$/m);
   assert.deepEqual(loadConfig(baseEnv(), CONTEXT).approverTeams, []);
   assert.deepEqual(loadConfig(baseEnv({ PRP_APPROVER_TEAMS: 'ie, data' }), CONTEXT).approverTeams, ['ie', 'data']);
+});
+
+test('require-review-decision is off by default', async () => {
+  const { github, core } = await authorize(baseEnv(), {
+    reviews: [review(1, 'bob', 'APPROVED')],
+    permissions: { carol: WRITE, bob: WRITE },
+    decision: 'REVIEW_REQUIRED',
+  });
+  assert.equal(core.outputs.authorized, 'true');
+  assert.equal(github.calls.graphql.length, 0);
+});
+
+test('require-review-decision authorizes an approval that GitHub also counts', async () => {
+  const { github, core } = await authorize(baseEnv({ PRP_TEAMS: '', PRP_REQUIRE_REVIEW_DECISION: 'true' }), {
+    reviews: [review(1, 'bob', 'APPROVED')],
+    permissions: { carol: WRITE, bob: WRITE },
+  });
+  assert.deepEqual(core.failures, []);
+  assert.equal(core.outputs.authorized, 'true');
+  assert.equal(core.outputs.via, 'approval:bob');
+  assert.equal(core.outputs.reason, 'head commit `aaaaaaa` is approved by `bob`, and GitHub counts the PR as approved');
+  assert.deepEqual(github.calls.graphql, [{ owner: 'TRI-IE', repo: 'infra', number: 42 }]);
+});
+
+for (const decision of ['REVIEW_REQUIRED', 'CHANGES_REQUESTED']) {
+  test(`require-review-decision denies an approval when GitHub's decision is ${decision}`, async () => {
+    const { core } = await authorize(baseEnv({ PRP_TEAMS: '', PRP_REQUIRE_REVIEW_DECISION: 'true' }), {
+      reviews: [review(1, 'bob', 'APPROVED')],
+      permissions: { carol: WRITE, bob: WRITE },
+      decision,
+    });
+    assert.deepEqual(core.failures, []);
+    assert.equal(core.outputs.authorized, 'false');
+    assert.equal(core.outputs.via, '');
+    assert.equal(
+      core.outputs.reason,
+      `Not authorized: GitHub does not count PR #42 as approved yet (review decision \`${decision}\`): ` +
+        'the latest commit still needs an approval that the branch rules require, such as one from a code owner.',
+    );
+  });
+}
+
+test('require-review-decision also applies to a team member', async () => {
+  const { github, core } = await authorize(baseEnv({ PRP_REQUIRE_REVIEW_DECISION: 'true' }), {
+    teams: { ie: { carol: 'active' } },
+    decision: 'REVIEW_REQUIRED',
+  });
+  assert.equal(core.outputs.authorized, 'false');
+  assert.equal(github.calls.graphql.length, 1);
+});
+
+test('require-review-decision fails closed when the branch rules require no review', async () => {
+  const { core } = await authorize(baseEnv({ PRP_TEAMS: '', PRP_REQUIRE_REVIEW_DECISION: 'true' }), {
+    reviews: [review(1, 'bob', 'APPROVED')],
+    permissions: { carol: WRITE, bob: WRITE },
+    decision: null,
+  });
+  assert.equal(core.failures.length, 1);
+  assert.match(core.failures[0], /no review decision for PR #42/);
+  assert.equal(core.outputs.authorized, 'false');
+});
+
+test('require-review-decision fails closed on an API error', async () => {
+  const { core } = await authorize(baseEnv({ PRP_TEAMS: '', PRP_REQUIRE_REVIEW_DECISION: 'true' }), {
+    reviews: [review(1, 'bob', 'APPROVED')],
+    permissions: { carol: WRITE, bob: WRITE },
+    decision: 502,
+  });
+  assert.equal(core.failures.length, 1);
+  assert.match(core.failures[0], /reading the review decision of PR #42 failed \(status 502/);
+  assert.equal(core.outputs.authorized, 'false');
+});
+
+test('require-review-decision needs a PR number even without allow-approval', async () => {
+  const { core } = await authorize(
+    baseEnv({ PRP_ALLOW_APPROVAL: 'false', PRP_REQUIRE_REVIEW_DECISION: 'true', PRP_PR_NUMBER: '' }),
+    {},
+  );
+  assert.equal(core.failures.length, 1);
+  assert.match(core.failures[0], /pr-number must be a positive integer when allow-approval or require-review-decision is true/);
 });

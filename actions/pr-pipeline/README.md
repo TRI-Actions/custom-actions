@@ -86,6 +86,8 @@ A deploy command is authorized only in one of two ways:
   Use as `approver-teams` only a team trusted to deploy on its own, because its members can approve their own commits.
   Without `approver-teams`, a reviewer who authored or committed any commit in the PR does not count.
 
+With `require-review-decision`, either way also needs GitHub's review decision for the PR to be `APPROVED`, so whatever the branch rules require on top of one approval counts too, such as a code owner's review.
+That keeps a team as the gate with a plain `GITHUB_TOKEN`, which cannot read teams: list the team in `CODEOWNERS` and turn on "Require review from Code Owners" in the ruleset.
 An approval of an older commit does not count, and neither does an approval that was dismissed or that the reviewer followed with a change request.
 `web-flow`, the committer of commits made in the GitHub web UI, is ignored, so without `approver-teams` clicking "Update branch" excludes only the user who clicked it.
 A re-run by anyone other than the commenter is rejected (`authorize` compares `triggering-actor`, which defaults to `${{ github.triggering_actor }}`), because a re-run of an old `!deploy` would resolve today's head under the original commenter's authority.
@@ -249,6 +251,8 @@ Approval-based authorization also requires the commenter to have the `admin`, `m
 Once the head commit has a qualifying approval, any such commenter is authorized.
 With `approver-teams` set, only an approval from an active member of one of those teams qualifies, which keeps a team as the gate while letting other contributors run the command themselves; membership is checked after write access, and an API error other than 404 fails the step.
 Team checks need a token that can read org membership: with a plain `GITHUB_TOKEN`, GitHub can answer 404, which looks like "not a member".
+With `require-review-decision: 'true'`, a command that passed the checks above is authorized only if GitHub's review decision for the PR is `APPROVED`; `REVIEW_REQUIRED` or `CHANGES_REQUESTED` is a denial.
+A decision of `null` means the branch rules require no review, which is a misconfiguration for this input, so it fails the step.
 A denial sets `authorized=false` and `reason` without failing the step; an API error other than 404 fails the step and sets `reason`.
 
 | Input | Required | Default | Description |
@@ -262,7 +266,8 @@ A denial sets `authorized=false` and `reason` without failing the step; an API e
 | `allow-approval` | no | `true` | Also authorize a commenter with write access when the head commit is approved by a reviewer with write access who is not the PR author; see approver-teams for commits of the reviewer (true/false) |
 | `sha` | no | `''` | Full PR head commit SHA (required when allow-approval is true) |
 | `pr-author` | no | `''` | Login of the PR author (required when allow-approval is true) |
-| `pr-number` | no | `''` | PR number (required when allow-approval is true) |
+| `pr-number` | no | `''` | PR number (required when allow-approval or require-review-decision is true) |
+| `require-review-decision` | no | `false` | Also require GitHub's review decision for the PR to be `APPROVED`, which adds what the branch rules require, such as a code owner's approval (true/false) |
 
 | Output | Description |
 |---|---|
