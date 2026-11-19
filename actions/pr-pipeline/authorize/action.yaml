@@ -38,9 +38,13 @@ inputs:
     required: false
     default: ''
   pr-number:
-    description: 'PR number (required when allow-approval is true)'
+    description: 'PR number (required when allow-approval or require-review-decision is true)'
     required: false
     default: ''
+  require-review-decision:
+    description: 'Also require GitHub''s review decision for the PR to be APPROVED before authorizing, which adds what the branch rules require, such as a code owner''s approval (true/false)'
+    required: false
+    default: 'false'
 
 outputs:
   authorized:
@@ -69,6 +73,7 @@ runs:
         PRP_SHA: ${{ inputs.sha }}
         PRP_PR_AUTHOR: ${{ inputs.pr-author }}
         PRP_PR_NUMBER: ${{ inputs.pr-number }}
+        PRP_REQUIRE_REVIEW_DECISION: ${{ inputs.require-review-decision }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |

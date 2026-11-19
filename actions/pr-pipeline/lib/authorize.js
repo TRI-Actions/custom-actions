@@ -6,6 +6,8 @@
 // When approver teams are set, the reviewer must be an active member of one of them, and
 // commits of their own in the PR do not matter: the approval of the head covers them.
 // Without approver teams, authors and committers of commits in the PR do not count.
+// With require-review-decision, any grant also needs GitHub's review decision for the PR to be
+// APPROVED, so what the branch rules require on top of one approval (a code owner) counts too.
 // Pure helpers are exported for unit tests; run() is the github-script entry point.
 
 const QUALIFYING_ROLES = new Set(['admin', 'maintain', 'write']);
@@ -92,6 +94,16 @@ function describeError(err) {
   return `status ${statusOf(err)}: ${err && err.message ? err.message : err}`;
 }
 
+// GitHub's own verdict on the PR's reviews under its branch rules: APPROVED, CHANGES_REQUESTED,
+// REVIEW_REQUIRED, or null when the rules require no review.
+async function reviewDecision(github, { owner, repo }, number) {
+  const data = await github.graphql(
+    'query($owner: String!, $repo: String!, $number: Int!) { repository(owner: $owner, name: $repo) { pullRequest(number: $number) { reviewDecision } } }',
+    { owner, repo, number },
+  );
+  return data?.repository?.pullRequest?.reviewDecision ?? null;
+}
+
 async function isActiveTeamMember(github, org, teamSlug, username) {
   try {
     const { data } = await github.rest.teams.getMembershipForUserInOrg({ org, team_slug: teamSlug, username });
@@ -155,6 +167,7 @@ function loadConfig(env, context) {
     sha: String(env.PRP_SHA ?? '').trim().toLowerCase(),
     prAuthor: String(env.PRP_PR_AUTHOR ?? '').trim(),
     prNumber: String(env.PRP_PR_NUMBER ?? '').trim(),
+    requireReviewDecision: parseBoolean('require-review-decision', env.PRP_REQUIRE_REVIEW_DECISION || 'false'),
   };
 
   if (config.allowApproval) {
@@ -162,8 +175,12 @@ function loadConfig(env, context) {
       throw new Error(`sha must be the full 40-character head commit SHA when allow-approval is true, got "${env.PRP_SHA ?? ''}"`);
     }
     if (!config.prAuthor) throw new Error('pr-author is required when allow-approval is true');
+  }
+  if (config.allowApproval || config.requireReviewDecision) {
     if (!/^[1-9]\d*$/.test(config.prNumber)) {
-      throw new Error(`pr-number must be a positive integer when allow-approval is true, got "${env.PRP_PR_NUMBER ?? ''}"`);
+      throw new Error(
+        `pr-number must be a positive integer when allow-approval or require-review-decision is true, got "${env.PRP_PR_NUMBER ?? ''}"`,
+      );
     }
     config.prNumber = Number(config.prNumber);
   }
@@ -190,7 +207,37 @@ async function run({ github, context, core, env }) {
     failClosed(`authorize: ${err.message}`);
     return;
   }
-  const { actor, triggeringActor, teams, approverTeams, org, allowApproval, sha, prAuthor, prNumber } = config;
+  const { actor, triggeringActor, teams, approverTeams, org, allowApproval, sha, prAuthor, prNumber, requireReviewDecision } =
+    config;
+
+  const grant = async (via, reason) => {
+    if (!requireReviewDecision) {
+      finish(true, via, reason);
+      return;
+    }
+    let decision;
+    try {
+      decision = await reviewDecision(github, context.repo, prNumber);
+    } catch (err) {
+      failClosed(`authorize: reading the review decision of PR #${prNumber} failed (${describeError(err)})`);
+      return;
+    }
+    if (decision === 'APPROVED') {
+      finish(true, via, `${reason}, and GitHub counts the PR as approved`);
+    } else if (decision === null) {
+      failClosed(
+        `authorize: GitHub has no review decision for PR #${prNumber}, so the branch rules require no review; ` +
+          'require-review-decision needs a ruleset that requires an approval',
+      );
+    } else {
+      finish(
+        false,
+        '',
+        `Not authorized: GitHub does not count PR #${prNumber} as approved yet (review decision \`${decision}\`): ` +
+          'the latest commit still needs an approval that the branch rules require, such as one from a code owner.',
+      );
+    }
+  };
 
   if (triggeringActor && !sameLogin(triggeringActor, actor)) {
     finish(
@@ -211,7 +258,7 @@ async function run({ github, context, core, env }) {
       return;
     }
     if (member) {
-      finish(true, `team:${team}`, `\`${actor}\` is an active member of team \`${org}/${team}\``);
+      await grant(`team:${team}`, `\`${actor}\` is an active member of team \`${org}/${team}\``);
       return;
     }
   }
@@ -288,7 +335,7 @@ async function run({ github, context, core, env }) {
         if (qualifies) break;
       }
       if (qualifies) {
-        finish(true, `approval:${login}`, `head commit \`${sha.slice(0, 7)}\` is approved by \`${login}\``);
+        await grant(`approval:${login}`, `head commit \`${sha.slice(0, 7)}\` is approved by \`${login}\``);
         return;
       }
     }
